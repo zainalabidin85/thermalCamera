@@ -24,7 +24,7 @@ A thermal vision system designed for detecting elevated body temperatures in ani
 
 ## 🖼️ System Diagram
 
-![System Architecture](assets/infographic_system_architecture.png)
+![System Architecture](assets/infoGraphic.png)
 
 
 ---
