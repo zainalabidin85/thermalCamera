@@ -35,18 +35,20 @@ A thermal vision system designed for detecting elevated body temperatures in ani
 ```
    git clone https://github.com/zainalabidin85/thermalCamera.git
 ```
-2. Install Python dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-4. Run RaspberryPi App:
+2. Run RaspberryPi App:
    ```
       cd raspberry_pi
       python3 v4_thermalCam.py
    ```
-5. Run Jetson App
+3. Run Jetson App
    ```
       cd jetson
       python3 v2_thermalNet.py --input http://<raspberry_pi_ip>:8080/video_feed
    ```
-6. Flash thermalPointer.ino:
+4. Flash esp32 code:
+   Before flashing the thermalPointer.ino into your esp32. Please be make sure to change the SSID and Password accordingly.
+   This thermalPointer.ino code uses Arduino.ide to flash.
+```
+const char* ssid = "your-network-name";  
+const char* password = "your-network-password";
+```
