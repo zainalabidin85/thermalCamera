@@ -1,4 +1,11 @@
 // final version known to be working on UI not check with physical movement of servos.
+/*
+  Thermal Pointer Control Firmware for ESP32
+  ------------------------------------------
+  Receives coordinates via HTTP POST from Flask.
+  Converts to servo angles and adjusts orientation.
+*/
+
 
 #include <WiFi.h>
 #include <WebServer.h>
