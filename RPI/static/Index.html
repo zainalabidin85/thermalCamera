@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Thermal Video Stream</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background-color: #111;
+      color: #eee;
+      display: flex;
+      height: 100vh;
+    }
+    .sidebar {
+      width: 240px;
+      background-color: #000;
+      padding: 20px;
+      box-sizing: border-box;
+      border-right: 2px solid #333;
+    }
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 10px;
+    }
+    canvas {
+      border: 2px solid #666;
+      background: #222;
+      margin-bottom: 10px;
+    }
+    .status-entry {
+      margin-bottom: 10px;
+    }
+    .label {
+      font-weight: bold;
+    }
+    .ip {
+      color: gold;
+    }
+    .active {
+      color: limegreen;
+    }
+    .inactive {
+      color: crimson;
+    }
+    #footer {
+      text-align: center;
+      margin-top: 10px;
+      font-size: 0.9em;
+      color: #ccc;
+    }
+    #config-feedback {
+      margin-top: 6px;
+      font-size: 0.85em;
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="status-entry">
+      <div class="label">thermalServer</div>
+      IP: <span id="ip-server" class="ip">...</span><br>
+      <span id="status-server" class="active">Active</span>
+    </div>
+    <hr>
+    <div class="status-entry">
+      <div class="label">espPointer</div>
+      IP: <span id="ip-esp" class="ip">...</span><br>
+      <span id="status-esp" class="inactive">Loading...</span>
+    </div>
+    <div class="status-entry">
+      <div class="label">Pointer Angles</div>
+      X: <span id="servoX">-</span>°
+      Y: <span id="servoY">-</span>°
+    </div>
+    <hr>
+    <div class="status-entry">
+      <div class="label">Jetson</div>
+      IP: <span id="ip-jetson" class="ip">...</span><br>
+      <span id="status-jetson" class="inactive">Loading...</span>
+    </div>
+    <div class="status-entry">
+      <div class="label">Status</div>
+      Scale: <span id="scaleValue">-</span><br>
+    </div>
+    <hr>
+    <details style="margin-top: 10px;">
+      <summary class="label">Advance Setup</summary>
+      <div style="margin-top: 10px;">
+        <div><b>ServoX Min:</b> <input type="number" id="xMin" value="20" min="0" max="180"></div>
+        <div><b>ServoX Max:</b> <input type="number" id="xMax" value="160" min="0" max="180"></div>
+        <div><b>ServoY Min:</b> <input type="number" id="yMin" value="30" min="0" max="180"></div>
+        <div><b>ServoY Max:</b> <input type="number" id="yMax" value="150" min="0" max="180"></div>
+        <button onclick="sendServoConfig()">Send</button>
+        <div id="config-feedback"></div>
+    </div>
+    <hr>
+  </div>
+  <div class="content">
+    <h2>Thermal Video Feed and Pointer</h2>
+    <canvas id="canvas" width="640" height="480"></canvas>
+    <img id="stream" style="display:none">
+    <div id="footer">Click the video feed sends temporary coordinate to espPointer.</div>
+  </div>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const img = document.getElementById('stream');
+    img.src = "/video_feed";
+
+    function drawToCanvas() {
+      try {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      } catch (e) {
+        console.error("Draw failed:", e);
+      }
+    }
+
+    img.onload = () => {
+      setInterval(drawToCanvas, 33);
+    };
+
+    canvas.addEventListener('click', async function(e) {
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.floor(e.clientX - rect.left);
+      const y = Math.floor(e.clientY - rect.top);
+
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, 2 * Math.PI);
+      ctx.fillStyle = 'red';
+      ctx.fill();
+
+      try {
+        const status = await fetch('/status.json').then(res => res.json());
+        const moveUrl = status.ip_esp32 + "/move";
+
+        const res = await fetch(moveUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x, y })
+        });
+
+        console.log("ESP32 response:", await res.text());
+      } catch (err) {
+        console.error("Failed to send:", err);
+      }
+    });
+
+    async function checkDeviceStatus() {
+      try {
+        const res = await fetch('/status.json');
+        const status = await res.json();
+
+        updateStatus("status-esp", status.esp32);
+        updateStatus("status-jetson", status.jetson);
+        updateStatus("status-server", true);
+
+        document.getElementById("ip-esp").textContent = status.ip_esp32;
+        document.getElementById("ip-jetson").textContent = status.ip_jetson;
+        document.getElementById("ip-server").textContent = status.ip_server;
+        document.getElementById("scaleValue").textContent = status.scale !== "-" ? status.scale : "-";
+      } catch (e) {
+        updateStatus("status-esp", false);
+        updateStatus("status-jetson", false);
+        updateStatus("status-server", false);
+
+        document.getElementById("ip-esp").textContent = "Unavailable";
+        document.getElementById("ip-jetson").textContent = "Unavailable";
+        document.getElementById("ip-server").textContent = "Unavailable";
+      }
+    }
+
+    function updateStatus(id, isActive) {
+      const el = document.getElementById(id);
+      if (isActive) {
+        el.textContent = "Active";
+        el.className = "active";
+      } else {
+        el.textContent = "Not Active";
+        el.className = "inactive";
+      }
+    }
+
+    setInterval(checkDeviceStatus, 3000);
+
+    async function sendServoConfig() {
+      const xMin = parseInt(document.getElementById('xMin').value);
+      const xMax = parseInt(document.getElementById('xMax').value);
+      const yMin = parseInt(document.getElementById('yMin').value);
+      const yMax = parseInt(document.getElementById('yMax').value);
+      const feedback = document.getElementById("config-feedback");
+
+      if (xMin > xMax || yMin > yMax) {
+        feedback.textContent = "❗ Invalid range: Min must be less than Max.";
+        feedback.style.color = "crimson";
+        return;
+      }
+
+      feedback.textContent = "⏳ Sending config...";
+      feedback.style.color = "orange";
+
+      try {
+        const res = await fetch("/proxy_config", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `xMin=${xMin}&xMax=${xMax}&yMin=${yMin}&yMax=${yMax}`
+        });
+        const text = await res.text();
+        feedback.textContent = "Config status: " + text;
+        feedback.style.color = "limegreen";
+      } catch (err) {
+        feedback.textContent = "❌ Config failed: " + err;
+        feedback.style.color = "crimson";
+      }
+    }
+    
+    async function updateServoPosition() {
+      try {
+        const res = await fetch('/proxy_servo');
+        const data = await res.json();
+        document.getElementById("servoX").textContent = data.x;
+        document.getElementById("servoY").textContent = data.y;
+      } catch (e) {
+        document.getElementById("servoX").textContent = "-";
+        document.getElementById("servoY").textContent = "-";
+      }
+    }
+
+    setInterval(updateServoPosition, 2000);
+    updateServoPosition();  // call once on page load
+
+  </script>
+</body>
+</html>
