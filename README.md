@@ -1,4 +1,4 @@
-# Thermal Camera Fever Detection System 🤖🌡️
+# Thermal Camera Fever Detection System
 
 A thermal vision system designed for detecting elevated body temperatures in animals using a Raspberry Pi, Jetson, and ESP32-based laser pointer.
 
@@ -36,15 +36,15 @@ A thermal vision system designed for detecting elevated body temperatures in ani
    git clone https://github.com/zainalabidin85/thermalCamera.git
 ```
 2. Run RaspberryPi App:
-   ```
-      cd raspberry_pi
-      python3 v4_thermalCam.py
-   ```
+```
+   cd raspberry_pi
+   python3 v4_thermalCam.py
+```
 3. Run Jetson App
-   ```
-      cd jetson
-      python3 v2_thermalNet.py --input http://<raspberry_pi_ip>:8080/video_feed
-   ```
+```
+    cd jetson
+    python3 v2_thermalNet.py --input http://<raspberry_pi_ip>:8080/video_feed
+```
 4. Flash esp32 code:
    Before flashing the thermalPointer.ino into your esp32. Please be make sure to change the SSID and Password accordingly.
    This thermalPointer.ino code uses Arduino.ide to flash.
