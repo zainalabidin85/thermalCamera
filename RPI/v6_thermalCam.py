@@ -528,7 +528,7 @@ def get_wlan_ip():
 
 @app.route("/")
 def index():
-    return send_from_directory("static", "v3_index.html")
+    return send_from_directory("static", "v3_Index.html")
 
 @app.route("/video_feed")
 def video_feed():
