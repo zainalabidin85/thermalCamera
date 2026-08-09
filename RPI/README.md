@@ -53,7 +53,7 @@ optional):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `THERMALCAM_HOST` / `THERMALCAM_PORT` | `pi4.local` / `5000` | thermalCam-Pi's address |
+| `THERMALCAM_HOST` / `THERMALCAM_PORT` | `thermalcam.local` / `5000` | thermalCam-Pi's address |
 | `THERMALCAM_BASE` | `http://<host>:<port>` | Overrides host/port with a full base URL |
 | `THERMALCAM_COLOR_MAP` | `inferno` | Color map requested from thermalCam-Pi's `/video_feed` |
 | `THERMALCAM_STATUS_POLL_INTERVAL` | `2.0` | Seconds between background polls of thermalCam-Pi's status (HUD/UI only) |

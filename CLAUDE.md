@@ -155,13 +155,37 @@ Not done / untested:
   unconfirmed: the settings-panel scrollbar color fix (see UI section
   above), and general look/touch behavior on whatever screen the
   Pi/Jetson is actually hooked up to.
-- `THERMALCAM_HOST` defaults to `pi4.local` (matches thermalCam-Pi's
-  README, which says it's deployed on a host named `pi4`) — confirm this
-  matches the actual deployed hostname/IP before relying on the default.
-- `JETSON/v2_thermalNet.py` was NOT touched during this rework — it still
-  does its own independent (older-style) detection + calibration flow
-  against thermalCam-Pi. Not reconciled with the new `feverDetection.py`
-  pipeline; decide later whether Jetson should run `feverDetection.py`
-  too, or keep its separate script.
-- No `git commit` has been made for any of this work yet — everything is
-  sitting as uncommitted working-tree changes.
+- `THERMALCAM_HOST` now defaults to `thermalcam.local` — confirmed correct
+  via a parallel remote commit (see "Remote divergence" below), which
+  independently hardcoded that same hostname. Previously defaulted to the
+  wrong guess `pi4.local`.
+
+## Remote divergence (2026-08-09/10) — resolved via merge
+
+While this session was rebuilding `RPI/`, the same user was independently
+pushing directly to `origin/main` from elsewhere: they moved the
+Raspberry-Pi camera/MLX90614 source code out of this repo entirely into
+the standalone `thermalCam-Pi` repo (deleting a `ThermalCam Pi/` folder
+that had briefly lived here), and separately rewrote `JETSON/v2_thermalNet.py`
+into its own self-contained `jetson_inference` script that also talks to
+thermalCam-Pi's real API (`/video_feed`, `/pixel_temp`) — convergent with
+this session's approach, but implemented independently with no shared code,
+plus its own `/detections` endpoint on port 8081.
+
+Resolved by merging `origin/main` into `main` (commit history has the
+details) with explicit choices, confirmed with the user first:
+- Kept `RPI/feverDetection.py` and friends (different component than what
+  was moved to `thermalCam-Pi` — this is the inference/pointer-control
+  engine, not camera+sensor source code).
+- Discarded the remote's `v2_thermalNet.py` rewrite entirely — standardized
+  on `JETSON/feverDetection_jetson.py` (the `runpy` launcher, one shared
+  model/codebase) as the only Jetson path. `JETSON/thermalNet.py` and
+  `v2_thermalNet.py` are both gone now.
+- **Caught and fixed a silent-breakage risk**: `RPI/device_scanner.py` was
+  untouched locally but deleted upstream (as part of deleting the old
+  `RPI/` dir); a raw merge auto-deletes files that are "unmodified on our
+  side, deleted on theirs" with **no conflict marker** — but
+  `feverDetection.py` still imports it. Had to explicitly
+  `git checkout main -- RPI/device_scanner.py` after resolving the real
+  conflicts, since git won't flag this kind of loss on its own. Worth
+  re-checking with `git diff HEAD` after any future merge in this repo.

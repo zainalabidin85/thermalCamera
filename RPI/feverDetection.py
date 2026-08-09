@@ -50,7 +50,7 @@ FEVER_MARGIN_C = float(os.getenv("FEVER_MARGIN_C", "1.0"))
 FEVER_QUERY_INTERVAL = float(os.getenv("FEVER_QUERY_INTERVAL", "0.3"))
 
 # thermalCam-Pi: the device with the camera + MLX90614 attached
-THERMALCAM_HOST = os.getenv("THERMALCAM_HOST", "pi4.local")
+THERMALCAM_HOST = os.getenv("THERMALCAM_HOST", "thermalcam.local")
 THERMALCAM_PORT = int(os.getenv("THERMALCAM_PORT", "5000"))
 THERMALCAM_BASE = os.getenv("THERMALCAM_BASE", f"http://{THERMALCAM_HOST}:{THERMALCAM_PORT}")
 THERMALCAM_COLOR_MAP = os.getenv("THERMALCAM_COLOR_MAP", "inferno")
