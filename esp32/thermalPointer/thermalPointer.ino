@@ -54,7 +54,7 @@ void handleMove() {
   currentX = angleX;
   currentY = angleY;
 
-  Serial.printf("📍 Received x=%d y=%d → angleX=%d angleY=%d\n", x, y, angleX, angleY);
+  Serial.printf("Received x=%d y=%d → angleX=%d angleY=%d\n", x, y, angleX, angleY);
   server.send(200, "text/plain", "Servo moved.");
 }
 
@@ -81,7 +81,7 @@ void handleConfig() {
   if (server.hasArg("yMin")) servoY_min = server.arg("yMin").toInt();
   if (server.hasArg("yMax")) servoY_max = server.arg("yMax").toInt();
 
-  Serial.printf("🔧 Updated servo limits: X[%d–%d], Y[%d–%d]\n",
+  Serial.printf("Updated servo limits: X[%d–%d], Y[%d–%d]\n",
                 servoX_min, servoX_max, servoY_min, servoY_max);
 
   server.send(200, "text/plain", "Servo Range Updated");
@@ -89,7 +89,7 @@ void handleConfig() {
 
 // function for network
 void printNetworkInfo() {
-  Serial.println("📡 Network Details:");
+  Serial.println("Network Details:");
   Serial.print("IP Address: ");     Serial.println(WiFi.localIP());
   Serial.print("MAC: ");            Serial.println(WiFi.macAddress());
   Serial.print("SSID: ");           Serial.println(WiFi.SSID());
@@ -101,7 +101,7 @@ void setup() {
   delay(1000);
 
   WiFi.begin(ssid, password);
-  Serial.print("🔌 Connecting to WiFi");
+  Serial.print("Connecting to WiFi");
   int retry = 0;
   while (WiFi.status() != WL_CONNECTED && retry++ < 20) {
     Serial.print(".");
@@ -109,17 +109,17 @@ void setup() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi connected");
+    Serial.println("\n WiFi connected");
     printNetworkInfo();
   } else {
-    Serial.println("\n❌ Failed to connect to WiFi");
+    Serial.println("\n Failed to connect to WiFi");
     return;
   }
 
   if (MDNS.begin("esp32")) {
-    Serial.println("✅ mDNS responder started");
+    Serial.println(" mDNS responder started");
   } else {
-    Serial.println("❌ mDNS setup failed");
+    Serial.println(" mDNS setup failed");
   }
 
   servoX.attach(20);  // use GPIO 20 for X
@@ -133,7 +133,7 @@ void setup() {
   server.on("/servo", handleServoStatus);
 
   server.begin();
-  Serial.println("🌐 Web server started");
+  Serial.println(" Web server started");
 }
 
 void loop() {

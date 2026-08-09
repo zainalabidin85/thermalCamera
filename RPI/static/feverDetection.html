@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fever Detection</title>
+<style>
+    :root {
+        --overlay-bg: rgba(0, 0, 0, 0.5);
+        --overlay-bg-light: rgba(20, 20, 20, 0.6);
+        --text-primary: rgba(255, 255, 255, 0.95);
+        --text-secondary: rgba(255, 255, 255, 0.65);
+        --accent-blue: #0a84ff;
+        --accent-green: #30d158;
+        --accent-red: #ff453a;
+        --border-light: rgba(255, 255, 255, 0.1);
+        --font-sf: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+        font-family: var(--font-sf);
+        background: #000;
+        color: var(--text-primary);
+        line-height: 1.3;
+        -webkit-font-smoothing: antialiased;
+        height: 100vh;
+        overflow: hidden;
+    }
+
+    button, input { font: inherit; color-scheme: dark; }
+    *:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+
+    .video-container {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: #000;
+    }
+    .video-feed {
+        width: 100%; height: 100%;
+        object-fit: cover;
+        display: block;
+        cursor: crosshair;
+    }
+
+    /* Top-left: system status pill */
+    .status-pill {
+        position: fixed;
+        top: 24px; left: 24px;
+        background: var(--overlay-bg-light);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border-radius: 30px;
+        padding: 6px 14px;
+        border: 1px solid var(--border-light);
+        z-index: 20;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        pointer-events: none;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-secondary); transition: background 0.2s ease, box-shadow 0.2s ease; }
+    .status-pill[data-state="active"] .status-dot { background: var(--accent-green); box-shadow: 0 0 6px rgba(48,209,88,0.6); }
+    .status-pill[data-state="inactive"] .status-dot { background: var(--accent-red); box-shadow: 0 0 6px rgba(255,69,58,0.6); }
+    .status-label { color: white; font-weight: 500; }
+
+    /* Top-right: FPS + icon buttons */
+    .top-bar {
+        position: fixed;
+        top: 16px; right: 16px;
+        display: flex;
+        gap: 8px;
+        z-index: 20;
+        align-items: center;
+    }
+    .fps-chip {
+        background: var(--overlay-bg);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        padding: 6px 12px;
+        border-radius: 30px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid var(--border-light);
+        color: var(--text-secondary);
+        letter-spacing: 0.2px;
+        pointer-events: none;
+        font-family: var(--font-mono);
+    }
+    .fps-value { color: white; font-weight: 600; }
+
+    .icon-btn {
+        background: var(--overlay-bg);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid var(--border-light);
+        border-radius: 50%;
+        width: 32px; height: 32px;
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        color: var(--text-secondary);
+        position: relative;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,0.12); color: white; }
+    .icon-btn.active { border-color: rgba(10,132,255,0.5); color: var(--accent-blue); background: rgba(10,132,255,0.12); }
+    .icon-btn .badge {
+        position: absolute;
+        top: -4px; right: -4px;
+        min-width: 15px; height: 15px;
+        border-radius: 8px;
+        background: var(--accent-red);
+        color: white;
+        font-size: 9.5px;
+        font-weight: 700;
+        display: flex; align-items: center; justify-content: center;
+        padding: 0 3px;
+        font-family: var(--font-mono);
+    }
+
+    /* Dropdown panel (shared look) */
+    .panel {
+        position: fixed;
+        top: 56px; right: 16px;
+        width: 280px;
+        background: rgba(18, 18, 20, 0.85);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid var(--border-light);
+        border-radius: 16px;
+        z-index: 25;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        opacity: 0;
+        transform: translateY(-8px) scale(0.97);
+        pointer-events: none;
+        transition: opacity 0.18s ease, transform 0.18s ease;
+        max-height: calc(100vh - 76px);
+        display: flex;
+        flex-direction: column;
+    }
+    .panel.visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: all; }
+
+    .panel { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.25) transparent; }
+    .panel::-webkit-scrollbar { width: 8px; }
+    .panel::-webkit-scrollbar-track { background: transparent; }
+    .panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+    .panel::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); background-clip: padding-box; }
+
+    .panel-section {
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+    .panel-section:last-child { border-bottom: none; }
+    .panel-section-title {
+        font-size: 10px;
+        font-weight: 600;
+        color: rgba(255,255,255,0.35);
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+    }
+
+    .device-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 0;
+        font-size: 13px;
+    }
+    .device-row .name { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-weight: 500; }
+    .device-row .meta { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 2px; font-family: var(--font-mono); }
+    .device-status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); }
+    .device-status .status-dot { width: 6px; height: 6px; }
+    .device-status[data-state="active"] { color: var(--accent-green); }
+    .device-status[data-state="active"] .status-dot { background: var(--accent-green); box-shadow: 0 0 5px rgba(48,209,88,0.6); }
+    .device-status[data-state="inactive"] { color: var(--accent-red); }
+    .device-status[data-state="inactive"] .status-dot { background: var(--accent-red); box-shadow: 0 0 5px rgba(255,69,58,0.6); }
+
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .stat-box { background: rgba(255,255,255,0.06); border: 1px solid var(--border-light); border-radius: 10px; padding: 8px 10px; }
+    .stat-label { font-size: 9.5px; color: rgba(255,255,255,0.35); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
+    .stat-value { font-size: 15px; font-weight: 600; color: white; font-family: var(--font-mono); }
+
+    .range-row { margin-bottom: 10px; }
+    .range-row:last-of-type { margin-bottom: 0; }
+    .range-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 5px; }
+    .range-label span:last-child { color: white; font-weight: 500; min-width: 26px; text-align: right; font-family: var(--font-mono); }
+    input[type=range].angle-slider {
+        width: 100%; height: 3px;
+        -webkit-appearance: none; appearance: none;
+        background: rgba(255,255,255,0.15);
+        border-radius: 2px; outline: none; cursor: pointer;
+    }
+    input[type=range].angle-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 14px; height: 14px;
+        border-radius: 50%;
+        background: var(--accent-blue);
+        cursor: pointer;
+    }
+    input[type=range].angle-slider::-moz-range-thumb {
+        width: 14px; height: 14px; border: none;
+        border-radius: 50%; background: var(--accent-blue); cursor: pointer;
+    }
+
+    .apply-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        background: rgba(10,132,255,0.15);
+        border: 1px solid rgba(10,132,255,0.4);
+        border-radius: 10px;
+        padding: 9px 12px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        font-family: var(--font-sf);
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--accent-blue);
+        margin-top: 12px;
+    }
+    .apply-btn:hover { background: rgba(10,132,255,0.24); }
+    .apply-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .apply-feedback { font-size: 10.5px; color: rgba(255,255,255,0.4); margin-top: 8px; text-align: center; min-height: 13px; }
+    .apply-feedback[data-tone="success"] { color: var(--accent-green); }
+    .apply-feedback[data-tone="error"] { color: var(--accent-red); }
+
+    /* Detections modal (mirrors a "library" style modal) */
+    .modal-overlay {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: rgba(0,0,0,0.75);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 90;
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.2s ease;
+        padding: 16px;
+    }
+    .modal-overlay.visible { opacity: 1; visibility: visible; }
+    .modal-card {
+        background: rgba(20,20,20,0.92);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border-radius: 16px;
+        padding: 20px;
+        width: 440px;
+        max-width: 100%;
+        max-height: 78vh;
+        border: 1px solid var(--border-light);
+        display: flex;
+        flex-direction: column;
+    }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .modal-title { font-size: 17px; font-weight: 600; }
+    .modal-close {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid var(--border-light);
+        border-radius: 50%;
+        width: 26px; height: 26px;
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        color: var(--text-secondary);
+        transition: all 0.15s ease;
+    }
+    .modal-close:hover { background: rgba(255,255,255,0.12); color: white; }
+    .modal-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+    .modal-empty { color: var(--text-secondary); font-size: 13px; text-align: center; padding: 24px 0; }
+
+    .det-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid var(--border-light);
+        border-radius: 10px;
+        padding: 10px 12px;
+    }
+    .det-item.is-fever { border-color: rgba(255,69,58,0.4); background: rgba(255,69,58,0.08); }
+    .det-info { flex: 1; min-width: 0; }
+    .det-species { font-size: 13.5px; font-weight: 600; color: white; text-transform: capitalize; }
+    .det-meta { font-size: 11px; color: var(--text-secondary); margin-top: 2px; font-family: var(--font-mono); }
+    .det-badge {
+        font-size: 10.5px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        padding: 3px 9px;
+        border-radius: 20px;
+        flex-shrink: 0;
+    }
+    .det-badge.fever { background: rgba(255,69,58,0.18); color: var(--accent-red); border: 1px solid rgba(255,69,58,0.35); }
+    .det-badge.normal { background: rgba(48,209,88,0.12); color: var(--accent-green); border: 1px solid rgba(48,209,88,0.3); }
+    .det-badge.unknown { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.4); }
+
+    /* Click feedback ping */
+    .click-ping {
+        position: fixed;
+        width: 36px; height: 36px;
+        border-radius: 50%;
+        border: 2px solid var(--accent-blue);
+        transform: translate(-50%, -50%) scale(0.4);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 15;
+    }
+    .click-ping.animate { animation: ping 0.55s ease-out forwards; }
+    @keyframes ping {
+        0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0.9; }
+        100% { transform: translate(-50%, -50%) scale(1.6); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .click-ping.animate { animation: none; opacity: 0; }
+    }
+
+    .hint-toast {
+        position: fixed;
+        bottom: 20px; left: 50%;
+        transform: translateX(-50%);
+        background: var(--overlay-bg);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border-radius: 30px;
+        padding: 7px 16px;
+        border: 1px solid var(--border-light);
+        z-index: 20;
+        font-size: 12px;
+        color: var(--text-secondary);
+        pointer-events: none;
+    }
+
+    @media (max-width: 600px) {
+        .status-pill { top: 16px; left: 16px; padding: 4px 10px; font-size: 11px; }
+        .top-bar { top: 12px; right: 12px; gap: 6px; }
+        .panel { width: calc(100vw - 32px); }
+        .modal-card { width: 100%; }
+        .hint-toast { font-size: 11px; padding: 6px 12px; }
+    }
+</style>
+</head>
+<body>
+
+    <div class="video-container">
+        <img src="/video_feed" alt="Live thermal detection feed" class="video-feed" id="videoFeed">
+    </div>
+
+    <!-- System status -->
+    <div class="status-pill" id="statusPill" data-state="inactive">
+        <div class="status-dot"></div>
+        <span class="status-label" id="statusLabel">Connecting&hellip;</span>
+    </div>
+
+    <!-- FPS + icon buttons -->
+    <div class="top-bar">
+        <div class="fps-chip"><span class="fps-value" id="fpsValue">0</span> fps</div>
+        <button class="icon-btn" id="detBtn" onclick="toggleDetections()" title="Live detections">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span class="badge" id="detBadge" style="display:none;">0</span>
+        </button>
+        <button class="icon-btn" id="gearBtn" onclick="togglePanel()" title="Devices &amp; pointer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+        </button>
+    </div>
+
+    <!-- Devices / pointer / servo range panel -->
+    <div class="panel" id="settingsPanel">
+        <div class="panel-section">
+            <div class="panel-section-title">Devices</div>
+            <div class="device-row">
+                <div>
+                    <div class="name">thermalServer</div>
+                    <div class="meta" id="ipServer">&hellip;</div>
+                </div>
+                <div class="device-status" id="statusServer" data-state="inactive"><div class="status-dot"></div><span>&hellip;</span></div>
+            </div>
+            <div class="device-row">
+                <div>
+                    <div class="name">espPointer</div>
+                    <div class="meta" id="ipEsp">&hellip;</div>
+                </div>
+                <div class="device-status" id="statusEsp" data-state="inactive"><div class="status-dot"></div><span>&hellip;</span></div>
+            </div>
+            <div class="device-row">
+                <div>
+                    <div class="name">thermalCam-Pi</div>
+                    <div class="meta">Ambient <span id="tcAmbient">-</span>&deg;C</div>
+                </div>
+                <div class="device-status" id="statusThermalcam" data-state="inactive"><div class="status-dot"></div><span>&hellip;</span></div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-section-title">Pointer</div>
+            <div class="stat-grid">
+                <div class="stat-box"><div class="stat-label">X</div><div class="stat-value"><span id="servoX">-</span>&deg;</div></div>
+                <div class="stat-box"><div class="stat-label">Y</div><div class="stat-value"><span id="servoY">-</span>&deg;</div></div>
+                <div class="stat-box"><div class="stat-label">Queued</div><div class="stat-value" id="queueLen">-</div></div>
+            </div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-section-title">Servo Range</div>
+            <div class="range-row">
+                <div class="range-label"><span>X Min</span><span id="xMinVal">20</span></div>
+                <input type="range" class="angle-slider" id="xMin" min="0" max="180" value="20" oninput="onRangeInput()">
+            </div>
+            <div class="range-row">
+                <div class="range-label"><span>X Max</span><span id="xMaxVal">160</span></div>
+                <input type="range" class="angle-slider" id="xMax" min="0" max="180" value="160" oninput="onRangeInput()">
+            </div>
+            <div class="range-row">
+                <div class="range-label"><span>Y Min</span><span id="yMinVal">30</span></div>
+                <input type="range" class="angle-slider" id="yMin" min="0" max="180" value="30" oninput="onRangeInput()">
+            </div>
+            <div class="range-row">
+                <div class="range-label"><span>Y Max</span><span id="yMaxVal">150</span></div>
+                <input type="range" class="angle-slider" id="yMax" min="0" max="180" value="150" oninput="onRangeInput()">
+            </div>
+            <button class="apply-btn" id="applyBtn" onclick="sendServoConfig()">Apply Range</button>
+            <div class="apply-feedback" id="applyFeedback"></div>
+        </div>
+    </div>
+
+    <!-- Detections modal -->
+    <div class="modal-overlay" id="detOverlay" onclick="if(event.target===this) closeDetections()">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">Live Detections</div>
+                <button class="modal-close" onclick="closeDetections()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-list" id="detList">
+                <div class="modal-empty">No detections yet</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="hint-toast">Click the feed to manually point the laser</div>
+    <div class="click-ping" id="clickPing"></div>
+
+<script>
+    const REF_W = 640, REF_H = 480;
+    const videoEl = document.getElementById('videoFeed');
+
+    // ---- Click-to-point (object-fit: cover aware) ----
+    function normCoords(clientX, clientY) {
+        const rect = videoEl.getBoundingClientRect();
+        const elW = rect.width, elH = rect.height;
+        const scale = Math.max(elW / REF_W, elH / REF_H);
+        const rendW = REF_W * scale, rendH = REF_H * scale;
+        const offX = (elW - rendW) / 2, offY = (elH - rendH) / 2;
+        const x = Math.max(0, Math.min(1, (clientX - rect.left - offX) / rendW));
+        const y = Math.max(0, Math.min(1, (clientY - rect.top - offY) / rendH));
+        return { x, y };
+    }
+
+    document.querySelector('.video-container').addEventListener('click', async (e) => {
+        const { x, y } = normCoords(e.clientX, e.clientY);
+        const px = Math.round(x * REF_W), py = Math.round(y * REF_H);
+
+        const ping = document.getElementById('clickPing');
+        ping.style.left = e.clientX + 'px';
+        ping.style.top = e.clientY + 'px';
+        ping.classList.remove('animate');
+        void ping.offsetWidth; // restart animation
+        ping.classList.add('animate');
+
+        try {
+            await fetch('/manual_point', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x: px, y: py })
+            });
+        } catch (err) {
+            console.error('manual_point failed:', err);
+        }
+    });
+
+    // ---- Panels ----
+    function togglePanel() {
+        document.getElementById('detOverlay').classList.remove('visible');
+        document.getElementById('detBtn').classList.remove('active');
+        const panel = document.getElementById('settingsPanel');
+        const btn = document.getElementById('gearBtn');
+        panel.classList.toggle('visible');
+        btn.classList.toggle('active');
+    }
+
+    function toggleDetections() {
+        document.getElementById('settingsPanel').classList.remove('visible');
+        document.getElementById('gearBtn').classList.remove('active');
+        const overlay = document.getElementById('detOverlay');
+        const btn = document.getElementById('detBtn');
+        const opening = !overlay.classList.contains('visible');
+        overlay.classList.toggle('visible', opening);
+        btn.classList.toggle('active', opening);
+    }
+    function closeDetections() {
+        document.getElementById('detOverlay').classList.remove('visible');
+        document.getElementById('detBtn').classList.remove('active');
+    }
+
+    document.addEventListener('click', (e) => {
+        const panel = document.getElementById('settingsPanel');
+        const btn = document.getElementById('gearBtn');
+        if (panel.classList.contains('visible') && !panel.contains(e.target) && !btn.contains(e.target)) {
+            panel.classList.remove('visible');
+            btn.classList.remove('active');
+        }
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetections(); });
+
+    // ---- Servo range sliders ----
+    function onRangeInput() {
+        document.getElementById('xMinVal').textContent = document.getElementById('xMin').value;
+        document.getElementById('xMaxVal').textContent = document.getElementById('xMax').value;
+        document.getElementById('yMinVal').textContent = document.getElementById('yMin').value;
+        document.getElementById('yMaxVal').textContent = document.getElementById('yMax').value;
+    }
+
+    async function sendServoConfig() {
+        const xMin = parseInt(document.getElementById('xMin').value, 10);
+        const xMax = parseInt(document.getElementById('xMax').value, 10);
+        const yMin = parseInt(document.getElementById('yMin').value, 10);
+        const yMax = parseInt(document.getElementById('yMax').value, 10);
+        const feedback = document.getElementById('applyFeedback');
+        const btn = document.getElementById('applyBtn');
+
+        if (xMin > xMax || yMin > yMax) {
+            feedback.textContent = 'Min must be less than Max';
+            feedback.dataset.tone = 'error';
+            return;
+        }
+
+        feedback.textContent = 'Applying…';
+        feedback.dataset.tone = '';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('/proxy_config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `xMin=${xMin}&xMax=${xMax}&yMin=${yMin}&yMax=${yMax}`
+            });
+            feedback.textContent = res.ok ? 'Range applied' : 'Server error';
+            feedback.dataset.tone = res.ok ? 'success' : 'error';
+        } catch (err) {
+            feedback.textContent = 'Failed: ' + err;
+            feedback.dataset.tone = 'error';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // ---- Detections list ----
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function renderDetections(dets) {
+        const list = document.getElementById('detList');
+        const badge = document.getElementById('detBadge');
+        const feverCount = (dets || []).filter(d => d.fever === true).length;
+
+        if (feverCount > 0) {
+            badge.style.display = 'flex';
+            badge.textContent = feverCount;
+        } else {
+            badge.style.display = 'none';
+        }
+
+        if (!dets || dets.length === 0) {
+            list.innerHTML = '<div class="modal-empty">No detections</div>';
+            return;
+        }
+        list.innerHTML = dets.map(d => {
+            const temp = (d.temp !== null && d.temp !== undefined) ? `${d.temp.toFixed(1)}&deg;C` : 'temp unavailable';
+            let badgeHtml;
+            if (d.fever === true) badgeHtml = '<span class="det-badge fever">Fever</span>';
+            else if (d.fever === false) badgeHtml = '<span class="det-badge normal">Normal</span>';
+            else badgeHtml = '<span class="det-badge unknown">&mdash;</span>';
+            return `<div class="det-item ${d.fever ? 'is-fever' : ''}">
+                <div class="det-info">
+                    <div class="det-species">${escapeHtml(d.cls)}</div>
+                    <div class="det-meta">${(d.conf * 100).toFixed(0)}% confidence &middot; ${temp}</div>
+                </div>
+                ${badgeHtml}
+            </div>`;
+        }).join('');
+    }
+
+    // ---- Status polling ----
+    async function checkStatus() {
+        try {
+            const res = await fetch('/status.json');
+            const status = await res.json();
+
+            const allUp = status.esp32 && status.thermalcam_connected;
+            const pill = document.getElementById('statusPill');
+            pill.dataset.state = allUp ? 'active' : 'inactive';
+            document.getElementById('statusLabel').textContent = allUp ? 'All Systems Active' : 'Attention Needed';
+
+            setDeviceStatus('statusServer', true, 'Active', 'Offline');
+            setDeviceStatus('statusEsp', status.esp32, 'Active', 'Offline');
+            setDeviceStatus('statusThermalcam', status.thermalcam_connected, 'Active', 'Offline');
+
+            const espIp = status.ip_esp32;
+            document.getElementById('ipEsp').textContent = espIp ? espIp.replace(/^https?:\/\//, '') : 'not discovered';
+            const serverIp = status.ip_server || '';
+            document.getElementById('ipServer').textContent = serverIp.includes('Unavailable') ? 'local' : serverIp.replace(/^https?:\/\//, '');
+            document.getElementById('queueLen').textContent = status.pointer_queue_len ?? '-';
+
+            const tc = status.thermalcam_temp || {};
+            document.getElementById('tcAmbient').textContent = tc.ambient ?? '-';
+
+            document.getElementById('fpsValue').textContent = Math.round(status.det_fps || 0);
+
+            renderDetections(status.detections);
+        } catch (e) {
+            document.getElementById('statusPill').dataset.state = 'inactive';
+            document.getElementById('statusLabel').textContent = 'Server Unreachable';
+            setDeviceStatus('statusServer', false, 'Active', 'Offline');
+            setDeviceStatus('statusEsp', false, 'Active', 'Offline');
+            setDeviceStatus('statusThermalcam', false, 'Active', 'Offline');
+        }
+    }
+
+    function setDeviceStatus(id, isActive, activeLabel, inactiveLabel) {
+        const el = document.getElementById(id);
+        el.dataset.state = isActive ? 'active' : 'inactive';
+        el.querySelector('span').textContent = isActive ? activeLabel : inactiveLabel;
+    }
+
+    setInterval(checkStatus, 2000);
+    checkStatus();
+
+    async function updateServoPosition() {
+        try {
+            const res = await fetch('/proxy_servo');
+            const data = await res.json();
+            document.getElementById('servoX').textContent = data.x ?? '-';
+            document.getElementById('servoY').textContent = data.y ?? '-';
+        } catch (e) {
+            document.getElementById('servoX').textContent = '-';
+            document.getElementById('servoY').textContent = '-';
+        }
+    }
+    setInterval(updateServoPosition, 2000);
+    updateServoPosition();
+</script>
+</body>
+</html>
