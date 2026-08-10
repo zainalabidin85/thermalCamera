@@ -180,8 +180,15 @@ def _ultra_predictor(weights):
         from ultralytics import YOLO
         model = YOLO(weights)
     except Exception as e:
-        print(f"[DET] Ultralytics load failed: {e}")
-        return None, None, []
+        err = f"Ultralytics load failed: {e}"
+        print(f"[DET] {err}")
+        return None, None, [], err
+
+    task = getattr(model, "task", None)
+    if task != "detect":
+        err = f"unsupported model task '{task}' — need a detection (-det) checkpoint, not classification/segmentation/pose/obb"
+        print(f"[DET] {weights}: {err}")
+        return None, None, [], err
 
     class_names = _names_to_list(getattr(model, "names", {}))
 
@@ -199,14 +206,15 @@ def _ultra_predictor(weights):
                 out.append((x1, y1, x2, y2, cls_nm, conf, frame_bgr.shape[1], frame_bgr.shape[0]))
         return out
 
-    return model, _predict, class_names
+    return model, _predict, class_names, None
 
 
 def _load_predictor(weights):
     """Build a predict(frame) closure for `weights`. Tries the optional
     yolo_detect.py hook first (e.g. custom Jetson/TensorRT loader), then
     falls back to plain Ultralytics. Returns (predict_fn, backend_name,
-    class_names) or (None, None, []) on failure."""
+    class_names, err) — predict_fn is None and err is set on failure
+    (e.g. bad path, or a non-detection checkpoint like -cls/-seg/-pose)."""
     yd = _try_import_yolo_detect()
     if yd:
         try:
@@ -219,14 +227,14 @@ def _load_predictor(weights):
                     return yd.predict(model, frame)
 
             class_names = _names_to_list(getattr(model, "names", None) or getattr(model, "class_names", None))
-            return _predict, "yolo_detect", class_names
+            return _predict, "yolo_detect", class_names, None
         except Exception as e:
             print(f"[DET] yolo_detect init failed for {weights}: {e}")
 
-    _, predict, class_names = _ultra_predictor(weights)
+    _, predict, class_names, err = _ultra_predictor(weights)
     if predict:
-        return predict, "ultralytics", class_names
-    return None, None, []
+        return predict, "ultralytics", class_names, None
+    return None, None, [], err
 
 
 def _apply_loaded_model(predict_fn, backend, class_names, weights):
@@ -249,9 +257,9 @@ def detection_loop():
         print("[DET] disabled")
         return
 
-    predict_fn, backend, class_names = _load_predictor(current_weights)
+    predict_fn, backend, class_names, err = _load_predictor(current_weights)
     if predict_fn is None:
-        print("[DET] no detector available (ultralytics missing or bad weights path)")
+        print(f"[DET] no detector available: {err or 'ultralytics missing or bad weights path'}")
         return
 
     _apply_loaded_model(predict_fn, backend, class_names, current_weights)
@@ -519,9 +527,9 @@ def select_model():
     if weights not in list_available_models():
         return jsonify({"ok": False, "err": "unknown model; must be one of /models' available list"}), 400
 
-    predict_fn, backend, class_names = _load_predictor(weights)
+    predict_fn, backend, class_names, err = _load_predictor(weights)
     if predict_fn is None:
-        return jsonify({"ok": False, "err": f"failed to load model: {weights}"}), 500
+        return jsonify({"ok": False, "err": err or f"failed to load model: {weights}"}), 400
 
     _apply_loaded_model(predict_fn, backend, class_names, weights)
     print(f"[DET] switched to {backend}: {weights} ({len(class_names)} classes)")
