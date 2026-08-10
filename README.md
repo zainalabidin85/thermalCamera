@@ -65,3 +65,7 @@ This repo is the **inference side** of a two-device pipeline:
 const char* ssid = "your-network-name";  
 const char* password = "your-network-password";
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
