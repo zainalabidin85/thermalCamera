@@ -44,6 +44,7 @@ DETECT_IOU = float(os.getenv("DETECT_IOU", "0.5"))
 YOLO_WEIGHTS = os.getenv("YOLO_WEIGHTS", "yolo11n.pt")
 CLASS_FILTER_ENV = os.getenv("DETECT_CLASSES", "").strip()
 CLASS_FILTER = set([c for c in CLASS_FILTER_ENV.split(",") if c]) or None
+MODELS_DIR = os.getenv("MODELS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"))
 
 FEVER_MOVE_COOLDOWN = float(os.getenv("FEVER_MOVE_COOLDOWN", "2.0"))
 FEVER_MARGIN_C = float(os.getenv("FEVER_MARGIN_C", "1.0"))
@@ -65,6 +66,12 @@ det_lock = threading.RLock()
 det_results = []   # species-only: [{"x1","y1","x2","y2","cx","cy","cls","conf"}]
 det_fps = 0.0
 detector_ready = False
+
+model_lock = threading.RLock()
+current_weights = YOLO_WEIGHTS   # currently active weights path
+active_predictor = {"fn": None, "backend": None}   # swappable predictor closure
+model_classes = []               # class names the current model can output
+active_class_filter = CLASS_FILTER   # None = no filter (all classes shown)
 
 thermalcam_cache_lock = threading.Lock()
 thermalcam_temp_cache = {}     # last /temperature_data response
@@ -123,6 +130,19 @@ def validate_config():
         print("Configuration validation passed")
 
 
+def list_available_models():
+    """Weights files the UI is allowed to switch to: the configured default
+    plus any .pt/.engine file dropped in MODELS_DIR."""
+    found = set()
+    if os.path.exists(YOLO_WEIGHTS):
+        found.add(os.path.abspath(YOLO_WEIGHTS))
+    if os.path.isdir(MODELS_DIR):
+        for fn in os.listdir(MODELS_DIR):
+            if fn.endswith((".pt", ".engine")):
+                found.add(os.path.abspath(os.path.join(MODELS_DIR, fn)))
+    return sorted(found)
+
+
 def thermalcam_status_loop():
     """Periodically cache thermalCam-Pi's temperature/system status for the
     HUD and /status.json, decoupled from the per-detection /pixel_temp
@@ -147,13 +167,23 @@ def _try_import_yolo_detect():
         return None
 
 
+def _names_to_list(names_map):
+    if isinstance(names_map, dict):
+        return sorted(set(str(n) for n in names_map.values()))
+    if isinstance(names_map, (list, tuple, set)):
+        return sorted(set(str(n) for n in names_map))
+    return []
+
+
 def _ultra_predictor(weights):
     try:
         from ultralytics import YOLO
         model = YOLO(weights)
     except Exception as e:
         print(f"[DET] Ultralytics load failed: {e}")
-        return None, None
+        return None, None, []
+
+    class_names = _names_to_list(getattr(model, "names", {}))
 
     def _predict(frame_bgr):
         r = model.predict(source=frame_bgr, imgsz=DETECT_IMGSZ,
@@ -169,7 +199,47 @@ def _ultra_predictor(weights):
                 out.append((x1, y1, x2, y2, cls_nm, conf, frame_bgr.shape[1], frame_bgr.shape[0]))
         return out
 
-    return model, _predict
+    return model, _predict, class_names
+
+
+def _load_predictor(weights):
+    """Build a predict(frame) closure for `weights`. Tries the optional
+    yolo_detect.py hook first (e.g. custom Jetson/TensorRT loader), then
+    falls back to plain Ultralytics. Returns (predict_fn, backend_name,
+    class_names) or (None, None, []) on failure."""
+    yd = _try_import_yolo_detect()
+    if yd:
+        try:
+            model = yd.init(weights)
+
+            def _predict(frame):
+                try:
+                    return yd.predict(model, frame, conf=DETECT_CONF, iou=DETECT_IOU, imgsz=DETECT_IMGSZ)
+                except TypeError:
+                    return yd.predict(model, frame)
+
+            class_names = _names_to_list(getattr(model, "names", None) or getattr(model, "class_names", None))
+            return _predict, "yolo_detect", class_names
+        except Exception as e:
+            print(f"[DET] yolo_detect init failed for {weights}: {e}")
+
+    _, predict, class_names = _ultra_predictor(weights)
+    if predict:
+        return predict, "ultralytics", class_names
+    return None, None, []
+
+
+def _apply_loaded_model(predict_fn, backend, class_names, weights):
+    """Install a freshly-loaded model as active. Resets the class filter if
+    it no longer matches the new model's classes. Caller holds no lock."""
+    global current_weights, active_class_filter
+    with model_lock:
+        active_predictor["fn"] = predict_fn
+        active_predictor["backend"] = backend
+        current_weights = weights
+        model_classes[:] = class_names
+        if active_class_filter and not active_class_filter.issubset(set(model_classes)):
+            active_class_filter = None
 
 
 def detection_loop():
@@ -179,31 +249,13 @@ def detection_loop():
         print("[DET] disabled")
         return
 
-    yd = _try_import_yolo_detect()
-    predictor = None
-    if yd:
-        try:
-            model = yd.init(os.getenv("YOLO_WEIGHTS", None))
+    predict_fn, backend, class_names = _load_predictor(current_weights)
+    if predict_fn is None:
+        print("[DET] no detector available (ultralytics missing or bad weights path)")
+        return
 
-            def _predict(frame):
-                try:
-                    return yd.predict(model, frame, conf=DETECT_CONF, iou=DETECT_IOU, imgsz=DETECT_IMGSZ)
-                except TypeError:
-                    return yd.predict(model, frame)
-
-            predictor = _predict
-            print("[DET] using yolo_detect.py")
-        except Exception as e:
-            print(f"[DET] yolo_detect init failed: {e}")
-
-    if predictor is None:
-        model, predictor = _ultra_predictor(YOLO_WEIGHTS)
-        if predictor:
-            print(f"[DET] using Ultralytics: {YOLO_WEIGHTS}")
-        else:
-            print("[DET] no detector available (ultralytics missing or bad weights path)")
-            return
-
+    _apply_loaded_model(predict_fn, backend, class_names, current_weights)
+    print(f"[DET] using {backend}: {current_weights} ({len(class_names)} classes)")
     detector_ready = True
 
     while True:
@@ -213,6 +265,9 @@ def detection_loop():
         frame_for_det = det_input_frame.copy()
 
         t0 = time.time()
+        with model_lock:
+            predictor = active_predictor["fn"]
+            class_filter = active_class_filter
         preds = predictor(frame_for_det)
 
         with det_lock:
@@ -226,7 +281,7 @@ def detection_loop():
                         x1, y1, x2, y2 = x1 * sx, y1 * sy, x2 * sx, y2 * sy
                     else:
                         x1, y1, x2, y2, cls, conf = p[:6]
-                    if CLASS_FILTER and (str(cls) not in CLASS_FILTER):
+                    if class_filter and (str(cls) not in class_filter):
                         continue
                     cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
                     det_results.append({
@@ -436,6 +491,75 @@ def manual_point():
         return jsonify({"ok": False, "err": "x & y required"}), 400
     queued = pointer.queue_move(x, y, pointer.reference_w, pointer.reference_h, force=True)
     return jsonify({"ok": queued})
+
+
+@app.route("/models")
+def list_models():
+    with model_lock:
+        current = current_weights
+        backend = active_predictor["backend"]
+    return jsonify({
+        "current": current,
+        "backend": backend,
+        "available": list_available_models(),
+        "detector_active": bool(DETECT_ENABLE and detector_ready),
+    })
+
+
+@app.route("/select_model", methods=["POST"])
+def select_model():
+    """Swap the running detector's weights. Restricted to files returned by
+    /models (the configured default + MODELS_DIR contents) so this can't be
+    used to load an arbitrary path off the filesystem."""
+    if not DETECT_ENABLE:
+        return jsonify({"ok": False, "err": "detection disabled"}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    weights = (data.get("weights") or "").strip()
+    if weights not in list_available_models():
+        return jsonify({"ok": False, "err": "unknown model; must be one of /models' available list"}), 400
+
+    predict_fn, backend, class_names = _load_predictor(weights)
+    if predict_fn is None:
+        return jsonify({"ok": False, "err": f"failed to load model: {weights}"}), 500
+
+    _apply_loaded_model(predict_fn, backend, class_names, weights)
+    print(f"[DET] switched to {backend}: {weights} ({len(class_names)} classes)")
+    return jsonify({"ok": True, "current": weights, "backend": backend, "classes": class_names})
+
+
+@app.route("/classes")
+def list_classes():
+    """Classes the current model can output, and which of them are active
+    (empty active list means no filter — all classes are shown)."""
+    with model_lock:
+        return jsonify({
+            "available": list(model_classes),
+            "active": sorted(active_class_filter) if active_class_filter else [],
+        })
+
+
+@app.route("/select_classes", methods=["POST"])
+def select_classes():
+    """Set which detected classes are kept. Body: {"classes": [...]},
+    empty list clears the filter (all classes shown)."""
+    global active_class_filter
+    if not DETECT_ENABLE:
+        return jsonify({"ok": False, "err": "detection disabled"}), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    classes = data.get("classes")
+    if not isinstance(classes, list):
+        return jsonify({"ok": False, "err": "classes must be a list (empty = all)"}), 400
+
+    with model_lock:
+        valid = set(model_classes)
+        requested = set(str(c) for c in classes)
+        unknown = requested - valid
+        if unknown:
+            return jsonify({"ok": False, "err": f"unknown classes: {sorted(unknown)}"}), 400
+        active_class_filter = requested or None
+        return jsonify({"ok": True, "active": sorted(requested)})
 
 
 @app.route("/proxy_config", methods=["POST"])

@@ -212,6 +212,37 @@
         border-radius: 50%; background: var(--accent-blue); cursor: pointer;
     }
 
+    .model-select {
+        width: 100%;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid var(--border-light);
+        border-radius: 10px;
+        padding: 8px 10px;
+        color: var(--text-primary);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        cursor: pointer;
+    }
+    .model-select:disabled { opacity: 0.4; cursor: not-allowed; }
+    .model-select option { background: #1a1a1c; color: var(--text-primary); }
+
+    .class-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .class-chip {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid var(--border-light);
+        border-radius: 20px;
+        padding: 5px 11px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        text-transform: capitalize;
+        transition: all 0.15s ease;
+        user-select: none;
+    }
+    .class-chip:hover { background: rgba(255,255,255,0.12); }
+    .class-chip.on { background: rgba(10,132,255,0.18); border-color: rgba(10,132,255,0.45); color: white; }
+    .class-empty { font-size: 12px; color: rgba(255,255,255,0.35); }
+
     .apply-btn {
         display: flex;
         align-items: center;
@@ -409,6 +440,19 @@
         </div>
 
         <div class="panel-section">
+            <div class="panel-section-title">Detection Model</div>
+            <select class="model-select" id="modelSelect"></select>
+            <button class="apply-btn" id="modelApplyBtn" onclick="applyModel()">Switch Model</button>
+            <div class="apply-feedback" id="modelFeedback"></div>
+        </div>
+
+        <div class="panel-section">
+            <div class="panel-section-title">Classes</div>
+            <div class="class-list" id="classList"></div>
+            <div class="apply-feedback" id="classFeedback"></div>
+        </div>
+
+        <div class="panel-section">
             <div class="panel-section-title">Pointer</div>
             <div class="stat-grid">
                 <div class="stat-box"><div class="stat-label">X</div><div class="stat-value"><span id="servoX">-</span>&deg;</div></div>
@@ -571,6 +615,132 @@
             btn.disabled = false;
         }
     }
+
+    // ---- Detection model selector ----
+    function basename(p) { return String(p).split(/[\\/]/).pop(); }
+
+    async function refreshModels() {
+        const select = document.getElementById('modelSelect');
+        const feedback = document.getElementById('modelFeedback');
+        try {
+            const res = await fetch('/models');
+            const data = await res.json();
+            if (!data.detector_active) {
+                select.innerHTML = '<option>Detector disabled</option>';
+                select.disabled = true;
+                document.getElementById('modelApplyBtn').disabled = true;
+                return;
+            }
+            // Don't clobber the dropdown while the user has it open/mid-choice.
+            if (document.activeElement === select) return;
+            select.disabled = false;
+            document.getElementById('modelApplyBtn').disabled = false;
+            select.innerHTML = (data.available || []).map(w =>
+                `<option value="${escapeHtml(w)}" ${w === data.current ? 'selected' : ''}>${escapeHtml(basename(w))}</option>`
+            ).join('') || '<option>No models found</option>';
+            if (!feedback.dataset.pending) {
+                feedback.textContent = `Active: ${basename(data.current)} (${data.backend || '?'})`;
+                feedback.dataset.tone = '';
+            }
+        } catch (e) {
+            select.innerHTML = '<option>Unavailable</option>';
+        }
+    }
+
+    async function applyModel() {
+        const select = document.getElementById('modelSelect');
+        const btn = document.getElementById('modelApplyBtn');
+        const feedback = document.getElementById('modelFeedback');
+        const weights = select.value;
+        if (!weights) return;
+
+        feedback.textContent = 'Loading model…';
+        feedback.dataset.tone = '';
+        feedback.dataset.pending = '1';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('/select_model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ weights })
+            });
+            const data = await res.json();
+            feedback.textContent = data.ok ? `Switched to ${basename(data.current)}` : (data.err || 'Failed to switch');
+            feedback.dataset.tone = data.ok ? 'success' : 'error';
+            if (data.ok) refreshClasses();
+        } catch (err) {
+            feedback.textContent = 'Failed: ' + err;
+            feedback.dataset.tone = 'error';
+        } finally {
+            btn.disabled = false;
+            delete feedback.dataset.pending;
+        }
+    }
+
+    setInterval(refreshModels, 5000);
+    refreshModels();
+
+    // ---- Class filter ----
+    let availableClasses = [];
+    let activeClasses = new Set();   // empty = no filter (all classes shown)
+    let classesUserEditing = false;
+
+    function renderClasses() {
+        const list = document.getElementById('classList');
+        if (!availableClasses.length) {
+            list.innerHTML = '<div class="class-empty">No classes reported yet</div>';
+            return;
+        }
+        list.innerHTML = availableClasses.map(name => {
+            const on = activeClasses.size === 0 || activeClasses.has(name);
+            return `<div class="class-chip ${on ? 'on' : ''}" onclick="toggleClass('${escapeHtml(name).replace(/'/g, "\\'")}')">${escapeHtml(name)}</div>`;
+        }).join('');
+    }
+
+    async function refreshClasses() {
+        if (classesUserEditing) return;
+        try {
+            const res = await fetch('/classes');
+            const data = await res.json();
+            availableClasses = data.available || [];
+            activeClasses = new Set(data.active || []);
+            renderClasses();
+        } catch (e) {
+            document.getElementById('classList').innerHTML = '<div class="class-empty">Unavailable</div>';
+        }
+    }
+
+    async function toggleClass(name) {
+        let base = activeClasses.size === 0 ? new Set(availableClasses) : new Set(activeClasses);
+        if (base.has(name)) base.delete(name); else base.add(name);
+        if (base.size === 0) return; // keep at least one class selected
+        if (base.size === availableClasses.length) base = new Set(); // full set == no filter
+
+        const feedback = document.getElementById('classFeedback');
+        classesUserEditing = true;
+        activeClasses = base;
+        renderClasses();
+
+        try {
+            const res = await fetch('/select_classes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ classes: Array.from(base) })
+            });
+            const data = await res.json();
+            feedback.textContent = data.ok ? '' : (data.err || 'Failed to update classes');
+            feedback.dataset.tone = data.ok ? '' : 'error';
+        } catch (err) {
+            feedback.textContent = 'Failed: ' + err;
+            feedback.dataset.tone = 'error';
+        } finally {
+            classesUserEditing = false;
+        }
+    }
+
+    setInterval(refreshClasses, 5000);
+    refreshClasses();
 
     // ---- Detections list ----
     function escapeHtml(s) {
