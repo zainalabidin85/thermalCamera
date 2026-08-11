@@ -30,5 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "RPI"))
 
+os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "RPI"))
+
 if __name__ == "__main__":
-    runpy.run_module("feverDetection", run_name="__main__")
+    runpy.run_module("feverDetection", run_name="__main__", alter_sys=True)
