@@ -48,6 +48,13 @@ firmware expects and rate-limiting how often the pointer is redirected.
 python3 feverDetection.py
 ```
 
+To use custom weights instead of the default `yolo11n.pt`, set `YOLO_WEIGHTS`
+to point at the file (relative paths are resolved from this directory,
+`RPI/`):
+```
+YOLO_WEIGHTS=models/your_model.pt python3 feverDetection.py
+```
+
 Serves on `http://<this-device-ip>:8080`. Key environment variables (all
 optional):
 
