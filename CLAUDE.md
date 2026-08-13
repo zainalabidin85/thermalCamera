@@ -68,9 +68,30 @@ pointer at them via an ESP32-controlled pan/tilt servo mount.
     have moved. Remapped to **GPIO 25 (X) / GPIO 26 (Y)** — both are
     broken out, output-capable, and free of flash/strapping/UART/default-
     I2C conflicts (confirmed with the user, who also had the option of
-    32/33 or custom pins). Rebuilds clean via `pio run`. **Wiring must be
-    updated to match** — servoX to GPIO25, servoY to GPIO26 — before the
-    next physical test; this hasn't been bench-verified yet.
+    32/33 or custom pins). **Wiring must be updated to match** — servoX
+    to GPIO25, servoY to GPIO26 — before the next physical test; this
+    hasn't been bench-verified yet.
+  - **WiFi credentials moved out of source** (2026-08-13): the hardcoded
+    `ssid`/`password` consts (`"thermalServer"` / empty) are gone,
+    replaced with `tzapu/WiFiManager` (`platformio.ini` lib_deps). On
+    boot it tries the last-saved network via the ESP32's own WiFi NVS; if
+    that fails it opens its own AP `ThermalPointer-Setup` (open, no
+    password) serving a captive-portal page at `192.168.4.1` where a
+    phone/laptop can pick the real SSID and enter its password — saved
+    to flash, used automatically on every future boot. Added
+    `POST /wifi_reset` (clears saved creds via `wifiManager.resetSettings()`,
+    then `ESP.restart()`) to force reconfiguration later without
+    reflashing. `setConfigPortalTimeout(180)` reboots and retries if the
+    portal sits unconfigured for 3 minutes.
+  - Flashed and bench-verified on real hardware via `pio run --target
+    upload --upload-port /dev/ttyUSB0` (board enumerates as a CP2102
+    USB-UART bridge) — serial log confirmed the fallback-AP flow working
+    end-to-end: tried the old saved `thermalServer` network, failed after
+    ~3s, correctly started `ThermalPointer-Setup` AP with `AP IP address:
+    192.168.4.1` and the web portal. Could not confirm the AP is
+    join-able over WiFi from this dev machine (`wlp9s0` reports
+    `unavailable` — no working WiFi radio here) — that part still needs a
+    real phone/laptop nearby the device.
 
 ## History / why it looks like this
 

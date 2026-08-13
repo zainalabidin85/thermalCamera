@@ -59,17 +59,19 @@ This repo is the **inference side** of a two-device pipeline:
     python3 v2_thermalNet.py --input http://<raspberry_pi_ip>:8080/video_feed
 ```
 4. Flash esp32 code:
-   Before flashing, edit `esp32/thermalPointer/src/main.cpp` and set your SSID/password accordingly.
-```
-const char* ssid = "your-network-name";  
-const char* password = "your-network-password";
-```
    This firmware is a [PlatformIO](https://platformio.org/) project (targets a classic
-   ESP32 dev board, `esp32dev`). With the PlatformIO CLI or VS Code extension installed:
+   ESP32 dev board, `esp32dev`). No WiFi credentials need editing in code — with the
+   PlatformIO CLI or VS Code extension installed:
 ```
     cd esp32/thermalPointer
     pio run --target upload
     pio device monitor
+```
+   On first boot (or after a `POST /wifi_reset`), the ESP32 opens its own WiFi network
+   named `ThermalPointer-Setup` (no password). Connect to it from a phone or laptop — a
+   captive-portal page should pop up automatically (or browse to `192.168.4.1`) — pick
+   your real network and enter its password there. The ESP32 saves it and reconnects
+   automatically on every future boot.
 ```
 
 ## License

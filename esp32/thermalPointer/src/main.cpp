@@ -4,6 +4,14 @@
   ------------------------------------------
   Receives coordinates via HTTP POST from Flask.
   Converts to servo angles and adjusts orientation.
+
+  WiFi setup: no SSID/password is hardcoded. On first boot (or after a
+  credential reset), the ESP32 opens its own AP named "ThermalPointer-Setup"
+  serving a captive-portal page — connect to it from a phone/laptop and
+  it walks you through picking your WiFi network and entering the
+  password. WiFiManager stores the result in flash (NVS) and reconnects
+  to it automatically on every subsequent boot; the portal only reappears
+  if the saved network can't be reached, or after POST /wifi_reset.
 */
 
 
@@ -12,11 +20,10 @@
 #include <ESP32Servo.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
-
-const char* ssid = "thermalServer";  // or your AP name
-const char* password = "";
+#include <WiFiManager.h>
 
 WebServer server(80);
+WiFiManager wifiManager;
 Servo servoX, servoY;
 
 // Servo range (configurable via /config)
@@ -74,6 +81,14 @@ void handleStatus() {
   server.send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
+// clears saved WiFi credentials and reboots into the setup portal
+void handleWifiReset() {
+  server.send(200, "text/plain", "WiFi credentials cleared. Rebooting into setup portal...");
+  delay(200);
+  wifiManager.resetSettings();
+  ESP.restart();
+}
+
 // function for servo configuration
 void handleConfig() {
   if (server.hasArg("xMin")) servoX_min = server.arg("xMin").toInt();
@@ -100,21 +115,17 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
-  int retry = 0;
-  while (WiFi.status() != WL_CONNECTED && retry++ < 20) {
-    Serial.print(".");
-    delay(500);
+  // Blocks until connected to a saved network, or until the user finishes
+  // the captive-portal setup flow on the "ThermalPointer-Setup" AP.
+  wifiManager.setConfigPortalTimeout(180);  // give up and reboot after 3 min unconfigured
+  if (!wifiManager.autoConnect("ThermalPointer-Setup")) {
+    Serial.println("\n Failed to connect / configure WiFi within timeout — restarting");
+    delay(1000);
+    ESP.restart();
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n WiFi connected");
-    printNetworkInfo();
-  } else {
-    Serial.println("\n Failed to connect to WiFi");
-    return;
-  }
+  Serial.println("\n WiFi connected");
+  printNetworkInfo();
 
   if (MDNS.begin("esp32")) {
     Serial.println(" mDNS responder started");
@@ -131,6 +142,7 @@ void setup() {
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/config", HTTP_POST, handleConfig);
   server.on("/servo", handleServoStatus);
+  server.on("/wifi_reset", HTTP_POST, handleWifiReset);
 
   server.begin();
   Serial.println(" Web server started");
