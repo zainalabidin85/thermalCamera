@@ -253,17 +253,29 @@ Done:
      `get_local_subnet()` (see Architecture section) — **confirmed**:
      after the fix, a rerun on the Jetson discovered ~35 real hosts on
      `10.170.8.x` including the ESP32 itself.
-  2. Even discovered, the ESP32 was still filtered out: its actual MAC
-     OUI is `2C:27:D7` (confirmed via `avahi-resolve -n esp32.local` →
-     `10.170.8.227`, cross-referenced against the scan log, then
-     `curl http://10.170.8.227/status` → `{"status":"ok"}`), which isn't
-     one of the two Espressif prefixes `VENDOR_PREFIXES` recognized
-     (`DC:06:75`, `3C:71:BF`) — so it was scanned, ARP-discovered, but
-     silently dropped as `vendor="Unknown"` before the `/status` check
-     ever ran. Added `2C:27:D7` to `VENDOR_PREFIXES`.
-  - Not yet reconfirmed end-to-end after fix #2 (pending a fresh pull +
-    rerun on the Jetson) — fix #1 alone was verified live, fix #2 not
-    yet re-tested.
+  2. Even discovered, the ESP32 was still filtered out: `VENDOR_PREFIXES`
+     only recognized two Espressif prefixes (`DC:06:75`, `3C:71:BF`), so
+     it was ARP-discovered but silently dropped as `vendor="Unknown"`
+     before the `/status` check ever ran. First attempt to find the real
+     OUI **got it wrong**: cross-referencing `avahi-resolve -n
+     esp32.local` (→ `10.170.8.227`) against the scan log picked up
+     `2C:27:D7`, which turned out to be a *different, unrelated device*
+     that happened to transiently hold `.227` during a DHCP lease change
+     — this network churns IPs fast (~35 hosts, many phones with
+     randomized MACs). Caught by then testing `curl` against that IP
+     directly and getting connection-refused, which didn't match. The
+     firmware's own serial log after a forced reset gave the real,
+     authoritative answer directly from `WiFi.macAddress()`: **`8C:94:DF:
+     6D:90:84`**. `VENDOR_PREFIXES` corrected to `8C:94:DF` (the wrong
+     `2C:27:D7` entry removed). **Lesson: on a busy/churning DHCP
+     network, trust the device's own self-reported MAC over
+     IP-to-MAC correlation from scan logs/mDNS taken at different
+     moments in time** — matches used arguably too coincidentally
+     without confirming the source's timestamp lined up.
+  - Not yet reconfirmed end-to-end after the corrected fix (pending a
+    fresh pull + rerun on the Jetson) — fix #1 (subnet) was verified
+    live; fix #2 (vendor prefix) verified against the device's real MAC
+    but the full discovery flow hasn't been re-run since the correction.
 
 Not done / untested:
 - **Still no trained species-specific weights** — running on stock

@@ -8,7 +8,7 @@ import threading
 VENDOR_PREFIXES = {
     "DC:06:75": "Espressif Inc.",
     "3C:71:BF": "Espressif Inc.",
-    "2C:27:D7": "Espressif Inc.",  # this project's actual thermalPointer board (esp32.local)
+    "8C:94:DF": "Espressif Inc.",  # this project's actual thermalPointer board (esp32.local)
     "DC:A6:32": "Raspberry Pi",
     "48:B0:2D": "NVIDIA",
     "00:04:4B": "NVIDIA",
