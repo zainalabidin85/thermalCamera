@@ -122,8 +122,8 @@ void setup() {
     Serial.println(" mDNS setup failed");
   }
 
-  servoX.attach(20);  // use GPIO 20 for X
-  servoY.attach(21);  // use GPIO 21 for Y
+  servoX.attach(25);  // use GPIO 25 for X
+  servoY.attach(26);  // use GPIO 26 for Y
   servoX.write(currentX);
   servoY.write(currentY);
 

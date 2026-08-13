@@ -59,11 +59,17 @@ This repo is the **inference side** of a two-device pipeline:
     python3 v2_thermalNet.py --input http://<raspberry_pi_ip>:8080/video_feed
 ```
 4. Flash esp32 code:
-   Before flashing the thermalPointer.ino into your esp32. Please be make sure to change the SSID and Password accordingly.
-   This thermalPointer.ino code uses Arduino.ide to flash.
+   Before flashing, edit `esp32/thermalPointer/src/main.cpp` and set your SSID/password accordingly.
 ```
 const char* ssid = "your-network-name";  
 const char* password = "your-network-password";
+```
+   This firmware is a [PlatformIO](https://platformio.org/) project (targets a classic
+   ESP32 dev board, `esp32dev`). With the PlatformIO CLI or VS Code extension installed:
+```
+    cd esp32/thermalPointer
+    pio run --target upload
+    pio device monitor
 ```
 
 ## License

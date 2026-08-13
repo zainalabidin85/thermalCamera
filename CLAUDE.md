@@ -48,6 +48,30 @@ pointer at them via an ESP32-controlled pan/tilt servo mount.
     separate/untouched per explicit instruction — do not merge or retire
     without being asked.
 
+- **`esp32/thermalPointer/`** — ESP32 firmware (separate build tooling,
+  same repo). Converted from a bare Arduino-IDE `.ino` sketch to a
+  PlatformIO project (2026-08-13): logic moved unchanged to `src/main.cpp`,
+  added `platformio.ini` (`env:esp32dev`, board `esp32dev` — a classic
+  ESP32 dev board, confirmed with the user, not S3/C3) with `lib_deps`
+  for ESP32Servo and ArduinoJson, and a `.gitignore` for `.pio`/`.vscode`.
+  Builds clean via `pio run` (verified in this session — PlatformIO CLI
+  happened to already be installed here). Flash with `pio run --target
+  upload` from `esp32/thermalPointer/`. Top-level `README.md` flashing
+  instructions updated to match.
+  - The sketch's header comment says physical servo movement was never
+    confirmed working (only the UI/HTTP side was) — and checking the pin
+    mapping found why: it attached `servoX` to **GPIO 20**, which exists
+    on the raw ESP32 die (passes the Arduino core's software validity
+    check) but is **not physically broken out on ESP32-WROOM-32 modules**
+    — the chip this "classic ESP32 dev board" (PlatformIO `esp32dev`) is
+    built on. No pin on the board is wired to it, so servoX could never
+    have moved. Remapped to **GPIO 25 (X) / GPIO 26 (Y)** — both are
+    broken out, output-capable, and free of flash/strapping/UART/default-
+    I2C conflicts (confirmed with the user, who also had the option of
+    32/33 or custom pins). Rebuilds clean via `pio run`. **Wiring must be
+    updated to match** — servoX to GPIO25, servoY to GPIO26 — before the
+    next physical test; this hasn't been bench-verified yet.
+
 ## History / why it looks like this
 
 - Originally (`v4`/`v5`/`v6_thermalCam.py`, all deleted) this repo's Pi
@@ -144,12 +168,12 @@ Done:
   imports cleanly, resolves `RPI/static/` correctly regardless of launch
   directory, and serves Flask on port 8080. All of `flask`/`cv2`/
   `requests`/`ultralytics`/`numpy` are installed in this dev environment.
+- **Real hardware validated (2026-08-13)**: user confirmed the pipeline
+  runs "very well" on both an actual Raspberry Pi and an actual Jetson,
+  against real hardware (not just the dev-machine smoke test above). This
+  resolves the previously open "no real hardware smoke test" item.
 
 Not done / untested:
-- **No real hardware smoke test yet** — never run against a live
-  thermalCam-Pi instance, real ESP32, real YOLO weights, or actual Jetson
-  hardware with CUDA/TensorRT. Only verified locally that the process
-  starts and serves without crashing.
 - UI has been verified only via headless Chrome screenshots on this dev
   machine, never on the actual device's display/browser. Specifically
   unconfirmed: the settings-panel scrollbar color fix (see UI section
