@@ -34,7 +34,20 @@ pointer at them via an ESP32-controlled pan/tilt servo mount.
     640x480 space the ESP32 firmware (`esp32/thermalPointer/`) assumes,
     rate-limits pointer moves.
   - `RPI/device_scanner.py` — LAN scan to auto-discover the ESP32 by MAC
-    vendor prefix.
+    vendor prefix. Ping-sweep subnet used to auto-fill the ARP table was
+    hardcoded to `10.42.0.x` — found and fixed 2026-08-13 after the user
+    ran `feverDetection_jetson.py` on the real Jetson (`10.170.8.182`)
+    with the ESP32 already joined to real WiFi via the new captive
+    portal, and the pointer wasn't discovered. `get_local_subnet()` now
+    derives the `/24` from whichever machine's own outbound IP at
+    runtime (so it self-adapts per device — Jetson, Pi, dev box —
+    without editing code), with a `DEVICE_SCAN_SUBNET` env var escape
+    hatch for boxes with multiple interfaces. **Not yet confirmed fixed
+    on the Jetson itself** — needs a `git pull` + rerun there; if the
+    ESP32 still isn't found after that, next suspect is
+    `VENDOR_PREFIXES` only listing two Espressif MAC OUIs (`DC:06:75`,
+    `3C:71:BF`) which would silently filter out a board with a different
+    Espressif prefix before the `/status` check ever runs.
   - `JETSON/feverDetection_jetson.py` — thin launcher, not a separate
     implementation. Adds `../RPI` to `sys.path` and runs
     `RPI/feverDetection.py` unmodified via `runpy` — one shared trained

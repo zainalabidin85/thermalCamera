@@ -23,7 +23,27 @@ def ping_ip(ip):
     # Ping once to populate ARP cache
     subprocess.run(["ping", "-c", "1", "-W", "1", ip], stdout=subprocess.DEVNULL)
 
-def async_ping_subnet(subnet="10.42.0", max_hosts=254):
+def get_local_subnet():
+    """Best-effort /24 prefix of this machine's LAN IP (e.g. "10.170.8" for
+    10.170.8.182), so the scan targets whatever network this device is
+    actually on instead of a hardcoded guess. Override with
+    DEVICE_SCAN_SUBNET if the routing-table default differs from the LAN
+    the ESP32 is on (e.g. multiple interfaces)."""
+    env_subnet = os.getenv("DEVICE_SCAN_SUBNET", "").strip()
+    if env_subnet:
+        return env_subnet
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # no packet actually sent; just picks the outbound iface
+        ip = s.getsockname()[0]
+        s.close()
+        return ".".join(ip.split(".")[:3])
+    except OSError:
+        return "10.42.0"
+
+def async_ping_subnet(subnet=None, max_hosts=254):
+    if subnet is None:
+        subnet = get_local_subnet()
     threads = []
     for i in range(1, max_hosts):
         ip = f"{subnet}.{i}"
@@ -68,8 +88,9 @@ def validate_status(ip, port=8081):  # Port 8081 for Jetson Flask
         return False
 
 def scan_devices():
-    print("Scanning subnet for ESP32 and Jetson devices...")
-    async_ping_subnet()  # Populate ARP table
+    subnet = get_local_subnet()
+    print(f"Scanning subnet {subnet}.0/24 for ESP32 and Jetson devices...")
+    async_ping_subnet(subnet)  # Populate ARP table
     all_devices = get_active_devices()
     valid_devices = []
 
