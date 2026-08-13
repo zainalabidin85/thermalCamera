@@ -240,19 +240,30 @@ Done:
   GPIO fix (2026-08-13)** — see the `esp32/thermalPointer/` bullet above
   under Architecture for full detail. Flashed and bench-verified on real
   hardware.
-- **Found (and fixing) why the ESP32 pointer wasn't discovered on the
-  Jetson (2026-08-13)**: this matches the "ESP32 pointer never tested"
-  item below almost exactly — `device_scanner.py`'s ARP-populating ping
-  sweep was hardcoded to `10.42.0.x`, unrelated to the real
-  `10.170.8.x` LAN both the Jetson and ESP32 are actually on, so it could
-  only ever pick up hosts that had *already* talked to the Jetson through
-  some other channel (explaining the 08-11 run's "found the gateway and a
-  few unidentified hosts" — never the ESP32 itself, since it hadn't
-  talked to the Jetson yet). Fixed in `get_local_subnet()` (see
-  Architecture section) — **not yet reconfirmed working on the Jetson
-  itself**, this fix needs a pull + rerun there to confirm. If still not
-  found afterward, next suspect: `VENDOR_PREFIXES` only lists two
-  Espressif MAC OUIs (`DC:06:75`, `3C:71:BF`).
+- **Found and fixed why the ESP32 pointer wasn't discovered on the Jetson
+  (2026-08-13)** — two separate bugs, both confirmed via SSH into the
+  Jetson over Tailscale (`orinnano`, `100.127.39.67`) and reading its
+  live scan log:
+  1. `device_scanner.py`'s ARP-populating ping sweep was hardcoded to
+     `10.42.0.x`, unrelated to the real `10.170.8.x` LAN both the Jetson
+     and ESP32 are actually on, so it could only ever pick up hosts that
+     had *already* talked to the Jetson through some other channel
+     (explaining the 08-11 run's "found the gateway and a few
+     unidentified hosts" — never the ESP32 itself). Fixed in
+     `get_local_subnet()` (see Architecture section) — **confirmed**:
+     after the fix, a rerun on the Jetson discovered ~35 real hosts on
+     `10.170.8.x` including the ESP32 itself.
+  2. Even discovered, the ESP32 was still filtered out: its actual MAC
+     OUI is `2C:27:D7` (confirmed via `avahi-resolve -n esp32.local` →
+     `10.170.8.227`, cross-referenced against the scan log, then
+     `curl http://10.170.8.227/status` → `{"status":"ok"}`), which isn't
+     one of the two Espressif prefixes `VENDOR_PREFIXES` recognized
+     (`DC:06:75`, `3C:71:BF`) — so it was scanned, ARP-discovered, but
+     silently dropped as `vendor="Unknown"` before the `/status` check
+     ever ran. Added `2C:27:D7` to `VENDOR_PREFIXES`.
+  - Not yet reconfirmed end-to-end after fix #2 (pending a fresh pull +
+    rerun on the Jetson) — fix #1 alone was verified live, fix #2 not
+    yet re-tested.
 
 Not done / untested:
 - **Still no trained species-specific weights** — running on stock
