@@ -5,4 +5,5 @@ __pycache__/
 # Trained model weights/exports — device-local, not source
 RPI/yolo11n.pt
 RPI/yolo11n_ncnn_model/
+JETSON/yolo11n.pt
 *.engine

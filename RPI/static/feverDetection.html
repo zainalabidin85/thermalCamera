@@ -567,7 +567,13 @@
     document.addEventListener('click', (e) => {
         const panel = document.getElementById('settingsPanel');
         const btn = document.getElementById('gearBtn');
-        if (panel.classList.contains('visible') && !panel.contains(e.target) && !btn.contains(e.target)) {
+        // Use composedPath (captured at dispatch time) instead of
+        // panel.contains(e.target): handlers like toggleClass() replace
+        // panel innerHTML synchronously, detaching e.target from the DOM
+        // before this bubbles up, which made contains() wrongly report
+        // "outside" and close the panel after a single class toggle.
+        const path = e.composedPath();
+        if (panel.classList.contains('visible') && !path.includes(panel) && !path.includes(btn)) {
             panel.classList.remove('visible');
             btn.classList.remove('active');
         }

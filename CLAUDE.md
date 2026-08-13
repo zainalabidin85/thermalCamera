@@ -185,7 +185,7 @@ separate Jetson template.
   before async `fetch()`/`setInterval` calls resolve, showing permanently
   stale placeholder text even though the app is working fine.
 
-## Current state (as of this note)
+## Current state (as of this note, 2026-08-13)
 
 Done:
 - `feverDetection.py` + `fever_estimator.py` + `pointer_mapper.py` +
@@ -195,28 +195,82 @@ Done:
   removed.
 - Top-level `README.md` and `RPI/README.md` updated to describe the
   two-device split.
-
-- `JETSON/feverDetection_jetson.py` is now a thin `runpy` launcher of
-  `RPI/feverDetection.py` (no `jetson_inference` dependency). Smoke-tested
-  on this dev machine (`timeout 3 python3 feverDetection_jetson.py`) — it
-  imports cleanly, resolves `RPI/static/` correctly regardless of launch
-  directory, and serves Flask on port 8080. All of `flask`/`cv2`/
-  `requests`/`ultralytics`/`numpy` are installed in this dev environment.
-- **Real hardware validated (2026-08-13)**: user confirmed the pipeline
-  runs "very well" on both an actual Raspberry Pi and an actual Jetson,
-  against real hardware (not just the dev-machine smoke test above). This
-  resolves the previously open "no real hardware smoke test" item.
+- `JETSON/feverDetection_jetson.py` is a thin `runpy` launcher of
+  `RPI/feverDetection.py` (no `jetson_inference` dependency).
+- **First real hardware smoke test done (2026-08-11)**: repo cloned onto
+  the Jetson Orin Nano, `ultralytics` installed via pip (`--no-deps` +
+  a `torch==2.1.0`/`torchvision==0.16.1` constraints file, so pip
+  couldn't clobber the NVIDIA-built Jetson wheels already on the box —
+  a plain `pip install ultralytics` would have pulled generic
+  torch/torchvision and broken CUDA). Launched against a real, powered-on
+  thermalCam-Pi (`thermalcam.local:5000`, resolves to the Pi 4 at
+  `10.170.8.161`): live video pulled over HTTP, YOLO running on CUDA at
+  ~25-33 fps using the default `yolo11n.pt` (auto-downloaded — no
+  species-trained weights committed to the repo yet, so it's detecting
+  generic COCO classes, not fever-specific species). Full Flask app,
+  `/status.json`, and the web UI all verified reachable at
+  `http://orinnano:8080/`.
+- Two real bugs found via this hardware run and fixed (both pushed and
+  pulled onto the Jetson, see commits `b979e4c` and `9dbd827`):
+  1. **Launcher `root_path` bug**: `runpy.run_module("feverDetection",
+     run_name="__main__")` without `alter_sys=True` leaves
+     `sys.modules['__main__']` pointing at the launcher script itself, so
+     Flask's `get_root_path()` resolved `static_folder` against `JETSON/`
+     instead of `RPI/` — `send_from_directory` 404'd on `/` (API routes
+     were unaffected, since they don't touch `root_path`). This directly
+     contradicts the older claim just above ("resolves `RPI/static/`
+     correctly regardless of launch directory") — that was never actually
+     verified against a real HTTP request, only that the process didn't
+     crash. Fixed by adding `alter_sys=True` plus an explicit `os.chdir`
+     into `RPI/` for path safety.
+  2. **Settings-panel closes after deselecting one class**: `toggleClass()`
+     re-renders the class-chip list synchronously, which detaches the
+     clicked chip from the DOM before its click event finishes bubbling.
+     The document-level outside-click handler read the (now-detached)
+     `e.target`, so `panel.contains(e.target)` wrongly returned `false` and
+     closed the panel — user could only deselect one class per panel open.
+     Fixed by switching to `e.composedPath()` (captured at dispatch time,
+     unaffected by later DOM mutation).
+- `JETSON/yolo11n.pt` (auto-downloaded default weights) added to
+  `.gitignore` alongside the existing `RPI/yolo11n.pt` entry.
+- **Full pipeline validated on real Pi + Jetson (2026-08-13)**: user
+  confirmed it runs well end-to-end on both actual devices (not just the
+  dev-machine smoke test above).
+- **ESP32 firmware migrated to PlatformIO + WiFiManager captive portal,
+  GPIO fix (2026-08-13)** — see the `esp32/thermalPointer/` bullet above
+  under Architecture for full detail. Flashed and bench-verified on real
+  hardware.
+- **Found (and fixing) why the ESP32 pointer wasn't discovered on the
+  Jetson (2026-08-13)**: this matches the "ESP32 pointer never tested"
+  item below almost exactly — `device_scanner.py`'s ARP-populating ping
+  sweep was hardcoded to `10.42.0.x`, unrelated to the real
+  `10.170.8.x` LAN both the Jetson and ESP32 are actually on, so it could
+  only ever pick up hosts that had *already* talked to the Jetson through
+  some other channel (explaining the 08-11 run's "found the gateway and a
+  few unidentified hosts" — never the ESP32 itself, since it hadn't
+  talked to the Jetson yet). Fixed in `get_local_subnet()` (see
+  Architecture section) — **not yet reconfirmed working on the Jetson
+  itself**, this fix needs a pull + rerun there to confirm. If still not
+  found afterward, next suspect: `VENDOR_PREFIXES` only lists two
+  Espressif MAC OUIs (`DC:06:75`, `3C:71:BF`).
 
 Not done / untested:
-- UI has been verified only via headless Chrome screenshots on this dev
-  machine, never on the actual device's display/browser. Specifically
-  unconfirmed: the settings-panel scrollbar color fix (see UI section
-  above), and general look/touch behavior on whatever screen the
-  Pi/Jetson is actually hooked up to.
+- **Still no trained species-specific weights** — running on stock
+  `yolo11n.pt` (COCO classes), not a fever-detection-trained model. No
+  `.pt`/`.engine` export for this project exists yet on either device.
+- **ESP32 pointer discovery fix unconfirmed on the Jetson** — see bullet
+  above; local fix committed and pushed, but not yet pulled/rerun on the
+  actual Jetson to confirm the pointer is discovered end-to-end.
+  Pointer-move code path (`pointer_mapper.py`, `/proxy_servo`) still
+  unverified.
+- UI verified in a real browser only enough to confirm the panel-close fix
+  reasoning is right; the settings-panel scrollbar color fix (see UI
+  section above) is still only spec-verified, not pixel-confirmed.
 - `THERMALCAM_HOST` now defaults to `thermalcam.local` — confirmed correct
   via a parallel remote commit (see "Remote divergence" below), which
-  independently hardcoded that same hostname. Previously defaulted to the
-  wrong guess `pi4.local`.
+  independently hardcoded that same hostname, AND now independently
+  reconfirmed by the 2026-08-11 hardware run (it resolved and connected
+  correctly). Previously defaulted to the wrong guess `pi4.local`.
 
 ## Remote divergence (2026-08-09/10) — resolved via merge
 
