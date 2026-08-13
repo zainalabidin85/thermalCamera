@@ -37,8 +37,6 @@ firmware expects and rate-limiting how often the pointer is redirected.
   `/video_feed`).
 - `pointer_mapper.py` — pixel-to-reference-frame normalization and
   rate-limited move queue for the ESP32.
-- `device_scanner.py` — LAN scan to auto-discover the ESP32 by MAC vendor
-  prefix.
 - `static/feverDetection.html` — web UI: live video feed, click-to-point,
   live detection table (species/confidence/temp/fever), thermalCam-Pi
   connection status, servo range controls.
@@ -71,3 +69,5 @@ optional):
 | `FEVER_MOVE_COOLDOWN` | `2.0` | Seconds between laser-pointer moves |
 | `FEVER_MARGIN_C` | `1.0` | °C above species normal-max before flagging fever |
 | `FEVER_QUERY_INTERVAL` | `0.3` | Minimum seconds between `/pixel_temp` query batches to thermalCam-Pi |
+| `ESP32_HOST` | `thermalpointer.local` | ESP32 pointer's mDNS hostname (matches `MDNS.begin(...)` in the firmware) |
+| `ESP32_BASE` | `http://<host>` | Overrides `ESP32_HOST` with a full base URL (e.g. a static IP) |
