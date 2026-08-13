@@ -127,8 +127,9 @@ void setup() {
   Serial.println("\n WiFi connected");
   printNetworkInfo();
 
-  if (MDNS.begin("esp32")) {
-    Serial.println(" mDNS responder started");
+  if (MDNS.begin("thermalpointer")) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.println(" mDNS responder started as thermalpointer.local");
   } else {
     Serial.println(" mDNS setup failed");
   }

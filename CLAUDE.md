@@ -33,21 +33,25 @@ pointer at them via an ESP32-controlled pan/tilt servo mount.
   - `RPI/pointer_mapper.py` — normalizes detection coords into the fixed
     640x480 space the ESP32 firmware (`esp32/thermalPointer/`) assumes,
     rate-limits pointer moves.
-  - `RPI/device_scanner.py` — LAN scan to auto-discover the ESP32 by MAC
-    vendor prefix. Ping-sweep subnet used to auto-fill the ARP table was
-    hardcoded to `10.42.0.x` — found and fixed 2026-08-13 after the user
-    ran `feverDetection_jetson.py` on the real Jetson (`10.170.8.182`)
-    with the ESP32 already joined to real WiFi via the new captive
-    portal, and the pointer wasn't discovered. `get_local_subnet()` now
-    derives the `/24` from whichever machine's own outbound IP at
-    runtime (so it self-adapts per device — Jetson, Pi, dev box —
-    without editing code), with a `DEVICE_SCAN_SUBNET` env var escape
-    hatch for boxes with multiple interfaces. **Not yet confirmed fixed
-    on the Jetson itself** — needs a `git pull` + rerun there; if the
-    ESP32 still isn't found after that, next suspect is
-    `VENDOR_PREFIXES` only listing two Espressif MAC OUIs (`DC:06:75`,
-    `3C:71:BF`) which would silently filter out a board with a different
-    Espressif prefix before the `/status` check ever runs.
+  - **`RPI/device_scanner.py` — deleted (2026-08-13)**, replaced by a
+    fixed mDNS-hostname binding. It used to LAN-scan (ping sweep to
+    populate ARP, then MAC-vendor-prefix match) to auto-discover the
+    ESP32 — see "ESP32 discovery" bullet under Current State below for
+    the two bugs found in it (hardcoded `10.42.0.x` subnet, then a
+    misidentified MAC OUI) before it was retired outright: MAC/IP-based
+    discovery breaks every time the physical ESP32 board is swapped
+    (new MAC), which is exactly what triggered this rewrite. Now the
+    ESP32 is addressed at a fixed `ESP32_HOST`/`ESP32_BASE`
+    (`thermalpointer.local` by default) in `feverDetection.py`, mirroring
+    how `THERMALCAM_HOST`/`THERMALCAM_BASE` already worked for
+    thermalCam-Pi — OS-level mDNS resolves the current IP fresh on every
+    HTTP request (confirmed working via glibc's `mdns4_minimal` NSS
+    module on the Jetson), so DHCP churn and hardware swaps are
+    transparent as long as the board's firmware advertises the same
+    mDNS name. The firmware's `MDNS.begin(...)` name was changed from
+    the generic `"esp32"` to project-specific `"thermalpointer"` to
+    match, plus `MDNS.addService("http", "tcp", 80)` for a proper
+    service record.
   - `JETSON/feverDetection_jetson.py` — thin launcher, not a separate
     implementation. Adds `../RPI` to `sys.path` and runs
     `RPI/feverDetection.py` unmodified via `runpy` — one shared trained

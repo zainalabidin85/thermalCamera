@@ -29,7 +29,6 @@ import os
 import atexit
 import importlib
 
-from device_scanner import scan_devices
 from fever_estimator import FeverEstimator
 from pointer_mapper import PointerMapper
 from thermalcam_client import ThermalCamClient
@@ -57,6 +56,15 @@ THERMALCAM_BASE = os.getenv("THERMALCAM_BASE", f"http://{THERMALCAM_HOST}:{THERM
 THERMALCAM_COLOR_MAP = os.getenv("THERMALCAM_COLOR_MAP", "inferno")
 THERMALCAM_STATUS_POLL_INTERVAL = float(os.getenv("THERMALCAM_STATUS_POLL_INTERVAL", "2.0"))
 
+# ESP32 pointer: bound by mDNS hostname (esp32/thermalPointer/src/main.cpp
+# advertises "thermalpointer.local"), not by IP/MAC scanning — this is the
+# same pattern as THERMALCAM_HOST above. Whatever ESP32 board runs that
+# firmware answers to this name, so swapping the physical board (which
+# changes its MAC) doesn't break discovery like the old ARP+vendor-prefix
+# scan did.
+ESP32_HOST = os.getenv("ESP32_HOST", "thermalpointer.local")
+ESP32_BASE = os.getenv("ESP32_BASE", f"http://{ESP32_HOST}")
+
 # ---------------- Shared state ----------------
 latest_frame: np.ndarray | None = None      # annotated display frame
 det_input_frame: np.ndarray | None = None   # frame handed to YOLO
@@ -77,13 +85,13 @@ thermalcam_cache_lock = threading.Lock()
 thermalcam_temp_cache = {}     # last /temperature_data response
 thermalcam_status_cache = {}   # last /system_status response
 
-# ESP32 info
-esp32_base = ""
-esp32_status = ""
-esp32_move = ""
-esp32_config_url = ""
-esp32_servo_url = ""
-esp32_locked = False
+# ESP32 info — fixed at ESP32_BASE (mDNS hostname), resolved fresh by the
+# OS on every request rather than scanned/cached. See ESP32_BASE above.
+esp32_base = ESP32_BASE
+esp32_status = f"{esp32_base}/status"
+esp32_move = f"{esp32_base}/move"
+esp32_config_url = f"{esp32_base}/config"
+esp32_servo_url = f"{esp32_base}/servo"
 
 # ---------------- Initialize helpers ----------------
 thermalcam = ThermalCamClient(THERMALCAM_BASE)
@@ -97,27 +105,6 @@ fever = FeverEstimator(
 pointer = PointerMapper(move_cooldown=FEVER_MOVE_COOLDOWN)
 
 # ---------------- Helpers ----------------
-def resolve_device_ips():
-    """Auto-find ESP32 on LAN (optional)."""
-    global esp32_base, esp32_status, esp32_move, esp32_config_url, esp32_servo_url, esp32_locked
-    if esp32_locked:
-        return
-    try:
-        for d in scan_devices():
-            hostname = d["hostname"].lower()
-            vendor = d["vendor"]
-            if "esp32" in hostname or "Espressif Inc." in vendor:
-                esp32_base = f"http://{d['ip']}"
-                esp32_status = f"{esp32_base}/status"
-                esp32_move = f"{esp32_base}/move"
-                esp32_config_url = f"{esp32_base}/config"
-                esp32_servo_url = f"{esp32_base}/servo"
-                esp32_locked = True
-                print(f"[ESP32] Resolved {esp32_base}")
-    except Exception as e:
-        print(f"[ESP32] scan error: {e}")
-
-
 def validate_config():
     issues = []
     if DETECT_ENABLE and not os.path.exists(YOLO_WEIGHTS):
@@ -391,12 +378,6 @@ def _send_http(url, payload, retries=2):
 
 
 def send_to_esp32_loop():
-    for _ in range(40):
-        if esp32_move.startswith("http"):
-            break
-        resolve_device_ips()
-        time.sleep(0.25)
-
     while True:
         payload = pointer.pop()
         if payload is None:
@@ -456,11 +437,9 @@ def thermalcam_status():
 
 @app.route("/status.json")
 def status_json():
-    resolve_device_ips()
     esp_alive = False
     try:
-        if esp32_status:
-            esp_alive = requests.get(esp32_status, timeout=0.5).ok
+        esp_alive = requests.get(esp32_status, timeout=0.5).ok
     except Exception:
         pass
 
