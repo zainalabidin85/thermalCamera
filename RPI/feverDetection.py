@@ -320,12 +320,6 @@ def capture_thermal_feed():
 
             colored = frame.copy()
 
-            with thermalcam_cache_lock:
-                temp_data = dict(thermalcam_temp_cache)
-            if temp_data.get("ambient") is not None:
-                cv2.putText(colored, f"Ambient: {temp_data['ambient']} C ({temp_data.get('status', '?')})",
-                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
             cv2.drawMarker(colored, (W // 2, H // 2), (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
 
             # ---- stage 3: fever secondary pass over species-only detections ----

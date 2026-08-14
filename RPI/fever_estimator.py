@@ -30,6 +30,11 @@ DEFAULT_MAX_QUERIES_PER_CYCLE = 3  # highest-confidence detections queried per c
 DEFAULT_TEMP_HOLD_SECONDS = 1.5  # how long a stale temp reading stays displayed
 TEMP_CACHE_MATCH_DIST = 0.08  # normalized (0-1) center-distance to treat as "same" detection
 
+# 5 points scattered around a detection's bbox center (as fractions of half
+# bbox width/height) - queried and averaged per detection instead of a
+# single center pixel, to smooth out MLX90614 read noise.
+TEMP_SAMPLE_OFFSETS = [(0.0, 0.0), (-0.2, -0.2), (0.2, -0.2), (-0.2, 0.2), (0.2, 0.2)]
+
 
 class FeverEstimator:
     """Turns species-only detections into temp + fever verdicts via thermalCam-Pi."""
@@ -83,7 +88,10 @@ class FeverEstimator:
                     break
                 xn = d["cx"] / float(frame_w)
                 yn = d["cy"] / float(frame_h)
-                temp = self.client.get_pixel_temp(xn, yn)
+                readings = [self.client.get_pixel_temp(pxn, pyn)
+                            for pxn, pyn in self._sample_points(d, frame_w, frame_h)]
+                valid = [t for t in readings if t is not None]
+                temp = (sum(valid) / len(valid)) if valid else None
                 temps[id(d)] = temp
                 if temp is not None:
                     self._cache_temp(d["cls"], xn, yn, temp, now)
@@ -104,6 +112,18 @@ class FeverEstimator:
             item["fever"] = self.is_feverish(d["cls"], t) if t is not None else None
             out.append(item)
         return out
+
+    def _sample_points(self, d, frame_w, frame_h):
+        """5 normalized (x,y) points scattered near this detection's bbox center."""
+        x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
+        half_w, half_h = (x2 - x1) / 2.0, (y2 - y1) / 2.0
+        cx, cy = d["cx"], d["cy"]
+        pts = []
+        for fx, fy in TEMP_SAMPLE_OFFSETS:
+            px = min(max(cx + fx * half_w, 0), frame_w - 1)
+            py = min(max(cy + fy * half_h, 0), frame_h - 1)
+            pts.append((px / float(frame_w), py / float(frame_h)))
+        return pts
 
     def _cache_temp(self, cls, xn, yn, temp, now):
         with self._lock:
