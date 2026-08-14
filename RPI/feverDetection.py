@@ -301,7 +301,6 @@ def capture_thermal_feed():
 
     while True:
         try:
-            t0 = time.time()
             ok, frame = cap.read() if cap.isOpened() else (False, None)
             if not ok or frame is None:
                 consecutive_errors += 1
@@ -320,10 +319,6 @@ def capture_thermal_feed():
             det_input_frame = frame  # already BGR, thermalCam-Pi handles the color map
 
             colored = frame.copy()
-
-            fps = 1.0 / max(1e-6, (time.time() - t0))
-            cv2.putText(colored, f"FPS: {fps:.2f} | YOLO FPS: {det_fps:.1f}",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             with thermalcam_cache_lock:
                 temp_data = dict(thermalcam_temp_cache)

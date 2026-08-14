@@ -27,6 +27,8 @@ ANIMAL_TEMP_RANGES = {
 DEFAULT_FEVER_MARGIN_C = 1.0  # °C above species normal-max before flagging fever
 DEFAULT_QUERY_INTERVAL = 0.3  # min seconds between /pixel_temp calls to thermalCam-Pi
 DEFAULT_MAX_QUERIES_PER_CYCLE = 3  # highest-confidence detections queried per cycle
+DEFAULT_TEMP_HOLD_SECONDS = 1.5  # how long a stale temp reading stays displayed
+TEMP_CACHE_MATCH_DIST = 0.08  # normalized (0-1) center-distance to treat as "same" detection
 
 
 class FeverEstimator:
@@ -34,15 +36,18 @@ class FeverEstimator:
 
     def __init__(self, client, fever_margin=DEFAULT_FEVER_MARGIN_C, temp_ranges=None,
                  query_interval=DEFAULT_QUERY_INTERVAL,
-                 max_queries_per_cycle=DEFAULT_MAX_QUERIES_PER_CYCLE):
+                 max_queries_per_cycle=DEFAULT_MAX_QUERIES_PER_CYCLE,
+                 temp_hold_seconds=DEFAULT_TEMP_HOLD_SECONDS):
         self.client = client
         self.fever_margin = fever_margin
         self.temp_ranges = temp_ranges or ANIMAL_TEMP_RANGES
         self.query_interval = query_interval
         self.max_queries_per_cycle = max_queries_per_cycle
+        self.temp_hold_seconds = temp_hold_seconds
 
         self._lock = RLock()
         self._last_query_ts = 0.0
+        self._temp_cache = []  # [{"cls","xn","yn","temp","ts"}, ...] most-recent-first
 
     def temp_range_for(self, species: str):
         return self.temp_ranges.get((species or "").lower())
@@ -80,6 +85,8 @@ class FeverEstimator:
                 yn = d["cy"] / float(frame_h)
                 temp = self.client.get_pixel_temp(xn, yn)
                 temps[id(d)] = temp
+                if temp is not None:
+                    self._cache_temp(d["cls"], xn, yn, temp, now)
                 queried += 1
             if queried:
                 with self._lock:
@@ -88,16 +95,41 @@ class FeverEstimator:
         out = []
         for d in detections:
             t = temps.get(id(d))
+            if t is None:
+                xn = d["cx"] / float(frame_w)
+                yn = d["cy"] / float(frame_h)
+                t = self._lookup_cached_temp(d["cls"], xn, yn, now)
             item = dict(d)
             item["temp"] = round(t, 1) if t is not None else None
             item["fever"] = self.is_feverish(d["cls"], t) if t is not None else None
             out.append(item)
         return out
 
+    def _cache_temp(self, cls, xn, yn, temp, now):
+        with self._lock:
+            self._temp_cache.insert(0, {"cls": cls, "xn": xn, "yn": yn, "temp": temp, "ts": now})
+            del self._temp_cache[20:]  # bounded; stale entries also expire by age below
+
+    def _lookup_cached_temp(self, cls, xn, yn, now):
+        """Nearest same-species cache entry within match distance + hold window."""
+        with self._lock:
+            entries = list(self._temp_cache)
+        best = None
+        best_dist = TEMP_CACHE_MATCH_DIST
+        for e in entries:
+            if e["cls"] != cls or (now - e["ts"]) > self.temp_hold_seconds:
+                continue
+            dist = ((e["xn"] - xn) ** 2 + (e["yn"] - yn) ** 2) ** 0.5
+            if dist <= best_dist:
+                best = e["temp"]
+                best_dist = dist
+        return best
+
     def status(self):
         return {
             "fever_margin": self.fever_margin,
             "query_interval": self.query_interval,
             "max_queries_per_cycle": self.max_queries_per_cycle,
+            "temp_hold_seconds": self.temp_hold_seconds,
             "known_species": sorted(self.temp_ranges.keys()),
         }
