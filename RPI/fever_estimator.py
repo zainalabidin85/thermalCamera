@@ -31,10 +31,15 @@ DEFAULT_MAX_QUERIES_PER_CYCLE = 3  # highest-confidence detections queried per c
 DEFAULT_TEMP_HOLD_SECONDS = 1.5  # how long a stale temp reading stays displayed
 TEMP_CACHE_MATCH_DIST = 0.08  # normalized (0-1) center-distance to treat as "same" detection
 
-# 5 points scattered around a detection's bbox center (as fractions of half
-# bbox width/height) - queried and averaged per detection instead of a
-# single center pixel, to smooth out MLX90614 read noise.
-TEMP_SAMPLE_OFFSETS = [(0.0, 0.0), (-0.2, -0.2), (0.2, -0.2), (-0.2, 0.2), (0.2, 0.2)]
+# 3x3 grid spread across a detection's bbox (as fractions of bbox width/
+# height, inset from the edges to avoid background bleed) - queried in one
+# parallel batch. thermalCam-Pi's /pixel_temp reads a real per-pixel
+# grayscale value from the raw sensor frame (not just distance-from-center
+# extrapolation), so different points in the bbox genuinely can read
+# different temps - this searches for the hottest spot (skin/fur vs.
+# clothing/background) instead of blindly averaging the geometric center.
+TEMP_GRID_FRACS = [0.2, 0.5, 0.8]
+TEMP_NEIGHBOR_COUNT = 4  # nearest points to the hottest one, averaged with it (5 total)
 
 
 class FeverEstimator:
@@ -54,7 +59,7 @@ class FeverEstimator:
         self._lock = RLock()
         self._last_query_ts = 0.0
         self._temp_cache = []  # [{"cls","xn","yn","temp","ts"}, ...] most-recent-first
-        self._pool = ThreadPoolExecutor(max_workers=len(TEMP_SAMPLE_OFFSETS))
+        self._pool = ThreadPoolExecutor(max_workers=len(TEMP_GRID_FRACS) ** 2)
 
     def temp_range_for(self, species: str):
         return self.temp_ranges.get((species or "").lower())
@@ -90,10 +95,10 @@ class FeverEstimator:
                     break
                 xn = d["cx"] / float(frame_w)
                 yn = d["cy"] / float(frame_h)
-                points = self._sample_points(d, frame_w, frame_h)
+                points = self._grid_points(d, frame_w, frame_h)
                 readings = list(self._pool.map(lambda p: self.client.get_pixel_temp(*p), points))
-                valid = [t for t in readings if t is not None]
-                temp = (sum(valid) / len(valid)) if valid else None
+                valid = [(p, t) for p, t in zip(points, readings) if t is not None]
+                temp = self._hotspot_average(valid)
                 temps[id(d)] = temp
                 if temp is not None:
                     self._cache_temp(d["cls"], xn, yn, temp, now)
@@ -115,17 +120,31 @@ class FeverEstimator:
             out.append(item)
         return out
 
-    def _sample_points(self, d, frame_w, frame_h):
-        """5 normalized (x,y) points scattered near this detection's bbox center."""
+    def _grid_points(self, d, frame_w, frame_h):
+        """Normalized (x,y) points in a grid spread across this detection's bbox."""
         x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
-        half_w, half_h = (x2 - x1) / 2.0, (y2 - y1) / 2.0
-        cx, cy = d["cx"], d["cy"]
+        w, h = (x2 - x1), (y2 - y1)
         pts = []
-        for fx, fy in TEMP_SAMPLE_OFFSETS:
-            px = min(max(cx + fx * half_w, 0), frame_w - 1)
-            py = min(max(cy + fy * half_h, 0), frame_h - 1)
-            pts.append((px / float(frame_w), py / float(frame_h)))
+        for fy in TEMP_GRID_FRACS:
+            for fx in TEMP_GRID_FRACS:
+                px = min(max(x1 + fx * w, 0), frame_w - 1)
+                py = min(max(y1 + fy * h, 0), frame_h - 1)
+                pts.append((px / float(frame_w), py / float(frame_h)))
         return pts
+
+    @staticmethod
+    def _hotspot_average(valid_readings):
+        """Average the hottest reading with its TEMP_NEIGHBOR_COUNT nearest
+        (by point distance) readings from the same batch - approximates
+        sampling a few pixels scattered around the hottest spot in the bbox."""
+        if not valid_readings:
+            return None
+        (hot_p, hot_t) = max(valid_readings, key=lambda pt: pt[1])
+        others = [(p, t) for p, t in valid_readings if (p, t) != (hot_p, hot_t)]
+        others.sort(key=lambda pt: (pt[0][0] - hot_p[0]) ** 2 + (pt[0][1] - hot_p[1]) ** 2)
+        neighbors = [t for _, t in others[:TEMP_NEIGHBOR_COUNT]]
+        chosen = [hot_t] + neighbors
+        return sum(chosen) / len(chosen)
 
     def _cache_temp(self, cls, xn, yn, temp, now):
         with self._lock:
