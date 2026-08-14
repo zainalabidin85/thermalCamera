@@ -311,6 +311,16 @@ def detection_loop():
         dt = max(1e-3, time.time() - t0)
         det_fps = 0.9 * det_fps + 0.1 * (1.0 / dt)
 
+        # Always yield here, even if inference was fast. This loop never slept
+        # before, running flat-out back-to-back (confirmed via tegrastats: all
+        # CPU cores pinned 40-70%, GPU bursting continuously) - since Python's
+        # GIL only lets one thread run bytecode at a time, that starved the
+        # JPEG-encoding/overlay threads of fair scheduling and showed up as
+        # choppy video on every viewing device, not just ones sharing this
+        # box's GPU. Detection doesn't need to run faster than this to be
+        # useful for fever screening.
+        time.sleep(0.01)
+
 
 # ---------------- Capture (remote) + fever overlay ----------------
 def frame_grabber_loop():
