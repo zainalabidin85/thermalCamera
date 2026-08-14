@@ -75,6 +75,9 @@ det_results = []   # species-only: [{"x1","y1","x2","y2","cx","cy","cls","conf"}
 det_fps = 0.0
 detector_ready = False
 
+eval_lock = threading.Lock()
+latest_evaluated = []   # det_results + {"temp","fever"}, set once per camera-loop frame
+
 model_lock = threading.RLock()
 current_weights = YOLO_WEIGHTS   # currently active weights path
 active_predictor = {"fn": None, "backend": None}   # swappable predictor closure
@@ -290,7 +293,7 @@ def detection_loop():
 
 # ---------------- Capture (remote) + fever overlay ----------------
 def capture_thermal_feed():
-    global latest_frame, det_input_frame, frame_size
+    global latest_frame, det_input_frame, frame_size, latest_evaluated
 
     video_url = thermalcam.video_feed_url(color_map=THERMALCAM_COLOR_MAP)
     print(f"[CAM] Connecting to thermalCam-Pi: {video_url}")
@@ -326,6 +329,8 @@ def capture_thermal_feed():
             with det_lock:
                 species_dets = det_results[:]
             evaluated = fever.evaluate(species_dets, W, H)
+            with eval_lock:
+                latest_evaluated = evaluated
 
             for d in evaluated:
                 x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
@@ -432,9 +437,8 @@ def status_json():
     except Exception:
         pass
 
-    with det_lock:
-        species_dets = det_results[:5]
-    evaluated = fever.evaluate(species_dets, *frame_size)
+    with eval_lock:
+        evaluated = latest_evaluated[:5]
     best_det = max(evaluated, key=lambda x: x["conf"]) if evaluated else None
 
     with thermalcam_cache_lock:
