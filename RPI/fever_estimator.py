@@ -10,6 +10,7 @@ thermalCam-Pi's job; this module only interprets its numbers.
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from threading import RLock
 
 # --- Species normal temperature ranges (°C) — estimates only ---
@@ -53,6 +54,7 @@ class FeverEstimator:
         self._lock = RLock()
         self._last_query_ts = 0.0
         self._temp_cache = []  # [{"cls","xn","yn","temp","ts"}, ...] most-recent-first
+        self._pool = ThreadPoolExecutor(max_workers=len(TEMP_SAMPLE_OFFSETS))
 
     def temp_range_for(self, species: str):
         return self.temp_ranges.get((species or "").lower())
@@ -88,8 +90,8 @@ class FeverEstimator:
                     break
                 xn = d["cx"] / float(frame_w)
                 yn = d["cy"] / float(frame_h)
-                readings = [self.client.get_pixel_temp(pxn, pyn)
-                            for pxn, pyn in self._sample_points(d, frame_w, frame_h)]
+                points = self._sample_points(d, frame_w, frame_h)
+                readings = list(self._pool.map(lambda p: self.client.get_pixel_temp(*p), points))
                 valid = [t for t in readings if t is not None]
                 temp = (sum(valid) / len(valid)) if valid else None
                 temps[id(d)] = temp
