@@ -66,6 +66,7 @@ ESP32_HOST = os.getenv("ESP32_HOST", "thermalpointer.local")
 ESP32_BASE = os.getenv("ESP32_BASE", f"http://{ESP32_HOST}")
 
 # ---------------- Shared state ----------------
+raw_frame: np.ndarray | None = None         # latest frame straight off the wire, undrawn
 latest_frame: np.ndarray | None = None      # annotated display frame
 det_input_frame: np.ndarray | None = None   # frame handed to YOLO
 frame_size = (640, 480)                     # actual (w,h) of latest captured frame
@@ -312,8 +313,15 @@ def detection_loop():
 
 
 # ---------------- Capture (remote) + fever overlay ----------------
-def capture_thermal_feed():
-    global latest_frame, det_input_frame, frame_size, latest_evaluated
+def frame_grabber_loop():
+    """Owns the connection to thermalCam-Pi and does nothing but drain it as
+    fast as frames arrive. Kept separate from overlay_loop's drawing/fever-
+    query work on purpose: cv2.VideoCapture over MJPEG-over-HTTP silently
+    buffers frames upstream if the reader stalls even briefly, and that
+    buffered lag compounds over time rather than recovering - it doesn't
+    self-correct once behind. If fever queries or drawing shared this loop,
+    a 100-200ms query stall would show up as growing video lag."""
+    global raw_frame, det_input_frame, frame_size
 
     video_url = thermalcam.video_feed_url(color_map=THERMALCAM_COLOR_MAP)
     print(f"[CAM] Connecting to thermalCam-Pi: {video_url}")
@@ -339,8 +347,28 @@ def capture_thermal_feed():
             consecutive_errors = 0
             H, W = frame.shape[:2]
             frame_size = (W, H)
+            raw_frame = frame
             det_input_frame = frame  # already BGR, thermalCam-Pi handles the color map
 
+        except Exception as e:
+            print(f"[CAM] grabber error: {e}")
+            time.sleep(1)
+
+
+def overlay_loop():
+    """Draws detections/fever labels onto the latest raw frame for display.
+    Runs independently of frame_grabber_loop's read cadence, so a fever
+    query batch stalling this loop never backs up the network read."""
+    global latest_frame, latest_evaluated
+
+    while True:
+        try:
+            frame = raw_frame
+            if frame is None:
+                time.sleep(0.02)
+                continue
+
+            H, W = frame.shape[:2]
             colored = frame.copy()
 
             # ---- stage 3: fever secondary pass over species-only detections ----
@@ -368,7 +396,7 @@ def capture_thermal_feed():
             latest_frame = colored
 
         except Exception as e:
-            print(f"Camera loop error: {e}")
+            print(f"Overlay loop error: {e}")
             time.sleep(1)
             continue
 
@@ -596,7 +624,8 @@ if __name__ == "__main__":
     print(f"[feverDetection] thermalCam-Pi: {THERMALCAM_BASE}")
 
     threads = [
-        threading.Thread(target=capture_thermal_feed, daemon=True),
+        threading.Thread(target=frame_grabber_loop, daemon=True),
+        threading.Thread(target=overlay_loop, daemon=True),
         threading.Thread(target=detection_loop, daemon=True),
         threading.Thread(target=send_to_esp32_loop, daemon=True),
         threading.Thread(target=thermalcam_status_loop, daemon=True),
