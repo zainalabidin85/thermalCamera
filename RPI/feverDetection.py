@@ -587,7 +587,7 @@ if __name__ == "__main__":
 
     print("[feverDetection] Running")
     try:
-        app.run(host="0.0.0.0", port=8080)
+        app.run(host="0.0.0.0", port=8080, threaded=True)
     except KeyboardInterrupt:
         print("\n[feverDetection] Shutting down...")
     finally:
