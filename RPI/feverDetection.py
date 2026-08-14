@@ -88,6 +88,9 @@ thermalcam_cache_lock = threading.Lock()
 thermalcam_temp_cache = {}     # last /temperature_data response
 thermalcam_status_cache = {}   # last /system_status response
 
+esp32_cache_lock = threading.Lock()
+esp32_alive_cache = False      # last-polled ESP32 reachability
+
 # ESP32 info — fixed at ESP32_BASE (mDNS hostname), resolved fresh by the
 # OS on every request rather than scanned/cached. See ESP32_BASE above.
 esp32_base = ESP32_BASE
@@ -146,6 +149,23 @@ def thermalcam_status_loop():
                 thermalcam_temp_cache = temp_data
             if status_data is not None:
                 thermalcam_status_cache = status_data
+        time.sleep(THERMALCAM_STATUS_POLL_INTERVAL)
+
+
+def esp32_status_loop():
+    """Periodically cache ESP32 reachability for /status.json. Doing this
+    live per-request is a trap: requests' timeout= doesn't bound mDNS
+    hostname resolution (getaddrinfo happens before the socket timeout is
+    applied), so a currently-unreachable thermalpointer.local can block
+    a request for several seconds even with timeout=0.5 set."""
+    global esp32_alive_cache
+    while True:
+        try:
+            alive = requests.get(esp32_status, timeout=0.5).ok
+        except Exception:
+            alive = False
+        with esp32_cache_lock:
+            esp32_alive_cache = alive
         time.sleep(THERMALCAM_STATUS_POLL_INTERVAL)
 
 
@@ -431,11 +451,8 @@ def thermalcam_status():
 
 @app.route("/status.json")
 def status_json():
-    esp_alive = False
-    try:
-        esp_alive = requests.get(esp32_status, timeout=0.5).ok
-    except Exception:
-        pass
+    with esp32_cache_lock:
+        esp_alive = esp32_alive_cache
 
     with eval_lock:
         evaluated = latest_evaluated[:5]
@@ -585,6 +602,7 @@ if __name__ == "__main__":
         threading.Thread(target=detection_loop, daemon=True),
         threading.Thread(target=send_to_esp32_loop, daemon=True),
         threading.Thread(target=thermalcam_status_loop, daemon=True),
+        threading.Thread(target=esp32_status_loop, daemon=True),
     ]
     for t in threads:
         t.start()
