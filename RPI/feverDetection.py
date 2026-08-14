@@ -343,8 +343,6 @@ def capture_thermal_feed():
 
             colored = frame.copy()
 
-            cv2.drawMarker(colored, (W // 2, H // 2), (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
-
             # ---- stage 3: fever secondary pass over species-only detections ----
             with det_lock:
                 species_dets = det_results[:]
