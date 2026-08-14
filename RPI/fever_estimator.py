@@ -64,7 +64,10 @@ class FeverEstimator:
         self._lock = RLock()
         self._last_query_ts = 0.0
         self._temp_cache = []  # [{"cls","xn","yn","temp","ts"}, ...] most-recent-first
-        self._pool = ThreadPoolExecutor(max_workers=len(TEMP_GRID_FRACS) ** 2)
+        # sized for the coarse-grid batch across every queried detection at once
+        # (that's the larger of the two batches - refine is 4/detection vs. 9)
+        self._pool = ThreadPoolExecutor(
+            max_workers=max(1, max_queries_per_cycle) * len(TEMP_GRID_FRACS) ** 2)
 
     def temp_range_for(self, species: str):
         return self.temp_ranges.get((species or "").lower())
@@ -94,18 +97,15 @@ class FeverEstimator:
         temps = {}
         if can_query:
             ordered = sorted(detections, key=lambda d: d["conf"], reverse=True)
-            queried = 0
-            for d in ordered:
-                if queried >= self.max_queries_per_cycle:
-                    break
-                xn = d["cx"] / float(frame_w)
-                yn = d["cy"] / float(frame_h)
-                temp = self._sample_detection(d, frame_w, frame_h)
-                temps[id(d)] = temp
-                if temp is not None:
-                    self._cache_temp(d["cls"], xn, yn, temp, now)
-                queried += 1
-            if queried:
+            to_query = ordered[:self.max_queries_per_cycle]
+            if to_query:
+                temps = self._sample_detections(to_query, frame_w, frame_h)
+                for d in to_query:
+                    t = temps.get(id(d))
+                    if t is not None:
+                        xn = d["cx"] / float(frame_w)
+                        yn = d["cy"] / float(frame_h)
+                        self._cache_temp(d["cls"], xn, yn, t, now)
                 with self._lock:
                     self._last_query_ts = now
 
@@ -122,31 +122,61 @@ class FeverEstimator:
             out.append(item)
         return out
 
-    def _sample_detection(self, d, frame_w, frame_h):
-        """Coarse 3x3 grid search across the bbox to locate the hottest area,
-        then refine with 4 tightly-clustered points around it and average
-        all 5 - two sequential parallel batches (9 points, then 4)."""
-        x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
-        w, h = (x2 - x1), (y2 - y1)
+    def _query_batch(self, points_px, frame_w, frame_h):
+        """Fire every point in one parallel batch; returns readings in the same order."""
+        return list(self._pool.map(
+            lambda p: self.client.get_pixel_temp(p[0] / frame_w, p[1] / frame_h), points_px))
 
-        grid_px = [(min(max(x1 + fx * w, 0), frame_w - 1), min(max(y1 + fy * h, 0), frame_h - 1))
+    def _sample_detections(self, dets, frame_w, frame_h):
+        """Coarse 3x3 grid search across each bbox to locate its hottest area,
+        then refine with 4 tightly-clustered points around it and average all
+        5 - two parallel batches total (all detections' grid points together,
+        then all detections' refine points together), not two per detection."""
+        grids = {}
+        grid_px, grid_owner = [], []
+        for d in dets:
+            x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
+            w, h = (x2 - x1), (y2 - y1)
+            pts = [(min(max(x1 + fx * w, 0), frame_w - 1), min(max(y1 + fy * h, 0), frame_h - 1))
                    for fy in TEMP_GRID_FRACS for fx in TEMP_GRID_FRACS]
-        grid_readings = list(self._pool.map(
-            lambda p: self.client.get_pixel_temp(p[0] / frame_w, p[1] / frame_h), grid_px))
-        valid = [(p, t) for p, t in zip(grid_px, grid_readings) if t is not None]
-        if not valid:
-            return None
-        (hot_x, hot_y), hot_t = max(valid, key=lambda pt: pt[1])
+            grids[id(d)] = pts
+            grid_px.extend(pts)
+            grid_owner.extend([id(d)] * len(pts))
+
+        grid_readings = self._query_batch(grid_px, frame_w, frame_h)
+
+        hotspots = {}  # id(d) -> ((hot_x, hot_y), hot_t)
+        by_det = {}
+        for owner, p, t in zip(grid_owner, grid_px, grid_readings):
+            if t is not None:
+                by_det.setdefault(owner, []).append((p, t))
+        for did, valid in by_det.items():
+            hotspots[did] = max(valid, key=lambda pt: pt[1])
 
         r = TEMP_REFINE_RADIUS_PX
-        refine_px = [(min(max(hot_x + dx, 0), frame_w - 1), min(max(hot_y + dy, 0), frame_h - 1))
-                     for dx, dy in [(-r, 0), (r, 0), (0, -r), (0, r)]]
-        refine_readings = list(self._pool.map(
-            lambda p: self.client.get_pixel_temp(p[0] / frame_w, p[1] / frame_h), refine_px))
-        valid_refine = [t for t in refine_readings if t is not None]
+        refine_px, refine_owner = [], []
+        for did, ((hot_x, hot_y), _) in hotspots.items():
+            pts = [(min(max(hot_x + dx, 0), frame_w - 1), min(max(hot_y + dy, 0), frame_h - 1))
+                   for dx, dy in [(-r, 0), (r, 0), (0, -r), (0, r)]]
+            refine_px.extend(pts)
+            refine_owner.extend([did] * len(pts))
 
-        chosen = [hot_t] + valid_refine
-        return sum(chosen) / len(chosen)
+        refine_readings = self._query_batch(refine_px, frame_w, frame_h) if refine_px else []
+
+        refine_by_det = {}
+        for owner, t in zip(refine_owner, refine_readings):
+            if t is not None:
+                refine_by_det.setdefault(owner, []).append(t)
+
+        temps = {}
+        for d in dets:
+            did = id(d)
+            if did not in hotspots:
+                continue
+            (_, hot_t) = hotspots[did]
+            chosen = [hot_t] + refine_by_det.get(did, [])
+            temps[did] = sum(chosen) / len(chosen)
+        return temps
 
     def _cache_temp(self, cls, xn, yn, temp, now):
         with self._lock:
